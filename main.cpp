@@ -1,12 +1,12 @@
-#include "opus_defines.h"
-#include <cstddef>
-#include <cstdio>
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_NO_DECODING
 #define MA_NO_ENCODING
-#include "main.h"
 #include <miniaudio.h>
+
 #include <opus.h>
+#include <opus_defines.h>
+
+#include "main.h"
 
 #define SAMPLE_RATE 48000
 #define BITRATE 64000
