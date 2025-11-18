@@ -16,17 +16,17 @@ void input_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
 
   CallbackData *cb_data = static_cast<CallbackData *>(pDevice->pUserData);
   ma_rb *ringBuffer = cb_data->ring_buffer;
-  unsigned char *buffer;
+  void *write_ptr;
   size_t bytesToWrite = (BITRATE / 8) / (SAMPLE_RATE / frameCount);
-  if (ma_rb_acquire_write(ringBuffer, &bytesToWrite, (void **)&buffer) !=
+  if (ma_rb_acquire_write(ringBuffer, &bytesToWrite, &write_ptr) !=
           MA_SUCCESS ||
       bytesToWrite == 0)
     return;
+
+  unsigned char *buffer = static_cast<unsigned char *>(write_ptr);
   auto encoded_bytes = opus_encode_float(cb_data->encoder_state,
                                          static_cast<const float *>(pInput),
                                          frameCount, buffer, bytesToWrite);
-  printf("original bytes: %d, encoded bytes: %d\n", frameCount * 8,
-         encoded_bytes);
   ma_rb_commit_write(ringBuffer, bytesToWrite);
 
   (void)pOutput;
@@ -36,15 +36,15 @@ void output_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
                           ma_uint32 frameCount) {
   CallbackData *cb_data = static_cast<CallbackData *>(pDevice->pUserData);
   ma_rb *ringBuffer = cb_data->ring_buffer;
-  unsigned char *buffer;
+  void *read_ptr;
   size_t bytesToRead = (BITRATE / 8) / (SAMPLE_RATE / frameCount);
-  if (ma_rb_acquire_read(ringBuffer, &bytesToRead, (void **)&buffer) !=
-      MA_SUCCESS)
+  if (ma_rb_acquire_read(ringBuffer, &bytesToRead, &read_ptr) != MA_SUCCESS)
     return;
 
+  unsigned char *buffer = static_cast<unsigned char *>(read_ptr);
   auto decoded_bytes =
       opus_decode_float(cb_data->decoder_state, buffer, bytesToRead,
-                        (float *)pOutput, frameCount, 0);
+                        static_cast<float *>(pOutput), frameCount, 0);
   ma_rb_commit_read(ringBuffer, bytesToRead);
 
   (void)pInput;
