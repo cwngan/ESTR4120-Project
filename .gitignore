@@ -1,0 +1,13 @@
+compile_commands.json
+VoiceChat
+
+.cache
+.vscode
+CMakeFiles
+build
+CMakeCache.txt
+
+.DS_Store
+
+cmake_install.cmake
+Makefile
