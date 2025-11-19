@@ -8,12 +8,12 @@ void input_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
                          ma_uint32 frameCount) {
   CallbackData *cb_data = static_cast<CallbackData *>(pDevice->pUserData);
   if (cb_data->ring_buffer == NULL) {
-    cb_data->ring_buffer = create_ring_buffer(
-        (ENCODED_SIZE(frameCount) + sizeof(short)) * frameCount);
+    cb_data->ring_buffer = create_ring_buffer((ENCODED_SIZE + sizeof(short)) *
+                                              (BITRATE / 8 / frameCount));
   }
   ma_rb *ringBuffer = cb_data->ring_buffer;
   void *write_ptr;
-  size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE(frameCount);
+  size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
   size_t bytes_to_write = target_bytes_to_write;
   if (ma_rb_acquire_write(ringBuffer, &bytes_to_write, &write_ptr) !=
           MA_SUCCESS ||
