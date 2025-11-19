@@ -27,6 +27,17 @@ void input_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
   auto encoded_bytes = opus_encode_float(
       cb_data->encoder_state, static_cast<const float *>(pInput), frameCount,
       buffer, target_bytes_to_write - sizeof(short));
+  if (encoded_bytes == -1) {
+    printf("Error encoding audio\n");
+    return;
+  }
+
+  spdlog::debug("{}: read {}, frame count: {}",
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch())
+                    .count(),
+                write_ptr, frameCount);
+
   *size = encoded_bytes;
   ma_rb_commit_write(ringBuffer, bytes_to_write);
 

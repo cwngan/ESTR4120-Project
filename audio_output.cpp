@@ -17,8 +17,15 @@ void output_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
   if (available_read < JITTER_DELAY * (ENCODED_SIZE + sizeof(short)))
     return;
 
+  if (available_read > MAX_DELAY * (ENCODED_SIZE + sizeof(short))) {
+    ma_uint32 skip =
+        available_read - MAX_DELAY * (ENCODED_SIZE + sizeof(short));
+    spdlog::info("skipping {} bytes", skip);
+    ma_rb_commit_read(ringBuffer, skip);
+  }
+
   void *read_ptr;
-  size_t target_bytes_to_read = sizeof(short) + ENCODED_SIZE(frameCount);
+  size_t target_bytes_to_read = sizeof(short) + ENCODED_SIZE;
   size_t bytes_to_read = target_bytes_to_read;
   if (ma_rb_acquire_read(ringBuffer, &bytes_to_read, &read_ptr) != MA_SUCCESS ||
       bytes_to_read != target_bytes_to_read)
@@ -27,10 +34,17 @@ void output_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
   unsigned short *size = static_cast<unsigned short *>(read_ptr);
   unsigned char *buffer =
       static_cast<unsigned char *>(read_ptr) + sizeof(*size);
+
   auto decoded_bytes =
       opus_decode_float(cb_data->decoder_state, buffer, *size,
                         static_cast<float *>(pOutput), frameCount, 0);
   ma_rb_commit_read(ringBuffer, bytes_to_read);
+
+  spdlog::debug("{}: read {}, frame count: {}",
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch())
+                    .count(),
+                read_ptr, frameCount);
 
   (void)pInput;
 }
