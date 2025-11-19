@@ -1,4 +1,7 @@
 #include "audio_output.h"
+#include "audio_common.h"
+#include "spdlog/spdlog.h"
+#include <chrono>
 #include <cstdio>
 
 void output_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,

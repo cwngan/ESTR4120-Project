@@ -1,5 +1,8 @@
 #include "audio_input.h"
+#include "spdlog/spdlog.h"
+#include <chrono>
 #include <cstdio>
+#include <opus_defines.h>
 
 void input_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
                          ma_uint32 frameCount) {

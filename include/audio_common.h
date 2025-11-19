@@ -6,8 +6,10 @@
 
 #define SAMPLE_RATE 48000
 #define BITRATE 64000
+#define FRAME_COUNT 480
 #define JITTER_DELAY 0
-#define ENCODED_SIZE(frameCount) (BITRATE / 8) / (SAMPLE_RATE / frameCount)
+#define MAX_DELAY 4
+#define ENCODED_SIZE (BITRATE / 8 * FRAME_COUNT) / SAMPLE_RATE
 
 struct CallbackData {
   OpusEncoder *encoder_state;
