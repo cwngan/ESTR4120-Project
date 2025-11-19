@@ -5,6 +5,7 @@ VoiceChat
 .vscode
 CMakeFiles
 build
+bin
 CMakeCache.txt
 
 .DS_Store
