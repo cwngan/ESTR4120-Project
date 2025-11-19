@@ -1,4 +1,4 @@
-#include "common.h"
+#include "audio_output.h"
 #include <cstdio>
 
 void output_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
@@ -21,11 +21,6 @@ void output_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
   if (ma_rb_acquire_read(ringBuffer, &bytes_to_read, &read_ptr) != MA_SUCCESS ||
       bytes_to_read != target_bytes_to_read)
     return;
-  // printf("%lld: read %p\n",
-  //        std::chrono::duration_cast<std::chrono::milliseconds>(
-  //            std::chrono::system_clock::now().time_since_epoch())
-  //            .count(),
-  //        read_ptr);
 
   unsigned short *size = static_cast<unsigned short *>(read_ptr);
   unsigned char *buffer =
@@ -33,8 +28,6 @@ void output_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
   auto decoded_bytes =
       opus_decode_float(cb_data->decoder_state, buffer, *size,
                         static_cast<float *>(pOutput), frameCount, 0);
-  // printf("reading from %p\n", read_ptr);
-  // printf("reading: %zu bytes, size: %d\n", bytes_to_read, *size);
   ma_rb_commit_read(ringBuffer, bytes_to_read);
 
   (void)pInput;

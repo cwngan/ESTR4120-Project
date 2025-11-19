@@ -1,4 +1,4 @@
-#include "common.h"
+#include "audio_input.h"
 #include <cstdio>
 
 void input_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
@@ -15,15 +15,8 @@ void input_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
   if (ma_rb_acquire_write(ringBuffer, &bytes_to_write, &write_ptr) !=
           MA_SUCCESS ||
       bytes_to_write != target_bytes_to_write) {
-    // printf("%p, %zu, %zu\n", cb_data->ring_buffer, target_bytes_to_write,
-    //        bytes_to_write);
     return;
   }
-  // printf("%lld: write %p\n",
-  //        std::chrono::duration_cast<std::chrono::milliseconds>(
-  //            std::chrono::system_clock::now().time_since_epoch())
-  //            .count(),
-  //        write_ptr);
 
   unsigned short *size = static_cast<unsigned short *>(write_ptr);
   unsigned char *buffer =
@@ -32,8 +25,6 @@ void input_data_callback(ma_device *pDevice, void *pOutput, const void *pInput,
       cb_data->encoder_state, static_cast<const float *>(pInput), frameCount,
       buffer, target_bytes_to_write - sizeof(short));
   *size = encoded_bytes;
-  // printf("writing to %p\n", write_ptr);
-  // printf("max: %zu, encoded: %d\n", bytes_to_write, encoded_bytes);
   ma_rb_commit_write(ringBuffer, bytes_to_write);
 
   (void)pOutput;
