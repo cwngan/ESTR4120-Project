@@ -38,6 +38,7 @@ ma_device *create_input_device(CallbackData *cb_data) {
   input_device_config.capture.format = ma_format_f32;
   input_device_config.capture.channels = 2;
   input_device_config.sampleRate = SAMPLE_RATE;
+  input_device_config.periodSizeInFrames = FRAME_COUNT;
   input_device_config.dataCallback = input_data_callback;
   input_device_config.pUserData = cb_data;
 

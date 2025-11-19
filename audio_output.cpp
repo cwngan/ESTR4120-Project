@@ -42,6 +42,7 @@ ma_device *create_output_device(CallbackData *cb_data) {
   output_device_config.playback.channels = 2;
   output_device_config.sampleRate = SAMPLE_RATE;
   output_device_config.dataCallback = output_data_callback;
+  output_device_config.periodSizeInFrames = FRAME_COUNT;
   output_device_config.pUserData = cb_data;
 
   if (ma_device_init(NULL, &output_device_config, output_device) !=
