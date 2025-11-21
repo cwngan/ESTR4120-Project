@@ -39,6 +39,7 @@ struct Client {
   void setup_main_connection();
   void init_connect();
   void setup_audio_connection();
-  void process();
+  void setup_interaction();
+  bool process();
   void capture_data_handler(std::vector<unsigned char> &data);
 };

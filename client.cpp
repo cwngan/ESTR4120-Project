@@ -3,6 +3,7 @@
 #include "common.h"
 #include "cxxopts.hpp"
 #include "spdlog/common.h"
+#include "spdlog/sinks/daily_file_sink.h"
 #include "spdlog/spdlog.h"
 #include "utils.h"
 
@@ -12,10 +13,23 @@
 #include <netdb.h>
 #include <opus.h>
 #include <opus_defines.h>
+#include <sstream>
 #include <stdexcept>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <unistd.h>
 #include <vector>
+
+void print_interaction_menu() {
+  std::cout << std::endl;
+  std::cout << "Interactive Menu" << std::endl;
+  std::cout << "1\t - Print connected clients" << std::endl;
+  std::cout << "2 <id>\t - Connect to clients" << std::endl;
+  std::cout << "3 <id>\t - Disconnect from client" << std::endl;
+  std::cout << "4\t - Start streaming audio" << std::endl;
+  std::cout << "0\t - Quit" << std::endl;
+  std::cout << "----------------------------\nEnter action: " << std::flush;
+}
 
 ClientOptions::ClientOptions() : opts("client") {
   // clang-format off
@@ -85,52 +99,80 @@ void Client::setup_audio_connection() {
   spdlog::info("Successfully connected to audio server");
 }
 
-void Client::process() {
-  epoll_event *events = new epoll_event[EPOLL_MAX_EVENTS];
+void Client::setup_interaction() {
+  epoll_event event;
+  event.events = EPOLLIN;
+  event.data.fd = STDIN_FILENO;
+  epoll_ctl(epoll_fd, EPOLL_CTL_ADD, STDIN_FILENO, &event);
+}
+
+bool Client::process() {
+  epoll_event events[EPOLL_MAX_EVENTS];
   spdlog::debug("Waiting for audio fd events...");
   int n_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
   for (int i = 0; i < n_events; i++) {
-    spdlog::debug("Audio fd activity");
-    std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
-    int size = recv(audio_fd, buffer.data(), MAX_PACKET_SIZE, 0);
-    if (size < -1) {
-      spdlog::error("Error receiving data from audio server");
-      continue;
-    }
-    buffer.resize(size);
-    AudioPacketHeader header;
-    memcpy(&header, buffer.data(), sizeof(header));
-    if (header.type != AudioPacketHeader::Type::Data) {
-      spdlog::error("Unsupported packet type from audio server");
-      continue;
-    }
-    if (!cb_data->ring_buffer) {
-      spdlog::debug("Ring buffer not init yet");
-      continue;
-    }
-    AudioDataPacketHeader data_header;
-    memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
-    std::vector<unsigned char> data(data_header.data_length);
-    memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
-           data.size());
+    if (events[i].data.fd == STDIN_FILENO) {
+      std::string line;
+      std::getline(std::cin, line);
+      if (line.size() == 0)
+        continue;
 
-    void *write_ptr;
-    size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
-    size_t bytes_to_write = target_bytes_to_write;
-    if (ma_rb_acquire_write(cb_data->ring_buffer, &bytes_to_write,
-                            &write_ptr) != MA_SUCCESS ||
-        bytes_to_write != target_bytes_to_write) {
-      return;
-    }
+      std::vector<std::string> actions;
+      std::stringstream ss(line);
+      std::string word;
+      while (ss >> word)
+        actions.push_back(word);
 
-    unsigned short *data_length = static_cast<unsigned short *>(write_ptr);
-    unsigned char *write_buffer_ptr =
-        static_cast<unsigned char *>(write_ptr) + sizeof(*data_length);
-    *data_length = data_header.data_length;
-    memcpy(write_buffer_ptr, data.data(), data_header.data_length);
-    ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
-    spdlog::debug("write {} bytes of audio data in ring buffer", *data_length);
+      if (actions[0] == "0") {
+        return false;
+      }
+
+      print_interaction_menu();
+    } else {
+      spdlog::debug("Audio fd activity");
+      std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
+      int size = recv(audio_fd, buffer.data(), MAX_PACKET_SIZE, 0);
+      if (size < -1) {
+        spdlog::error("Error receiving data from audio server");
+        continue;
+      }
+      buffer.resize(size);
+      AudioPacketHeader header;
+      memcpy(&header, buffer.data(), sizeof(header));
+      if (header.type != AudioPacketHeader::Type::Data) {
+        spdlog::error("Unsupported packet type from audio server");
+        continue;
+      }
+      if (!cb_data->ring_buffer) {
+        spdlog::debug("Ring buffer not init yet");
+        continue;
+      }
+      AudioDataPacketHeader data_header;
+      memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
+      std::vector<unsigned char> data(data_header.data_length);
+      memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
+             data.size());
+
+      void *write_ptr;
+      size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
+      size_t bytes_to_write = target_bytes_to_write;
+      if (ma_rb_acquire_write(cb_data->ring_buffer, &bytes_to_write,
+                              &write_ptr) != MA_SUCCESS ||
+          bytes_to_write != target_bytes_to_write) {
+        return true;
+      }
+
+      unsigned short *data_length = static_cast<unsigned short *>(write_ptr);
+      unsigned char *write_buffer_ptr =
+          static_cast<unsigned char *>(write_ptr) + sizeof(*data_length);
+      *data_length = data_header.data_length;
+      memcpy(write_buffer_ptr, data.data(), data_header.data_length);
+      ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
+      spdlog::debug("write {} bytes of audio data in ring buffer",
+                    *data_length);
+    }
   }
+  return true;
 }
 
 void Client::capture_data_handler(std::vector<unsigned char> &data) {
@@ -150,6 +192,10 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
 
 int main(int argc, char **argv) {
   // spdlog::set_level(spdlog::level::debug);
+  auto daily_logger =
+      spdlog::daily_logger_mt("daily_logger", "logs/client.log");
+  spdlog::set_default_logger(daily_logger);
+  spdlog::flush_on(spdlog::level::info);
 
   ClientOptions options;
   options.parse_options(argc, argv);
@@ -157,8 +203,41 @@ int main(int argc, char **argv) {
   Client client;
   client.options = options;
 
+  ma_context context;
+  if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
+    spdlog::error("Error initializing audio context");
+    throw std::runtime_error("ma_context_init()");
+  }
+
+  ma_device_info *pPlaybackInfos;
+  ma_uint32 playbackCount;
+  ma_device_info *pCaptureInfos;
+  ma_uint32 captureCount;
+  if (ma_context_get_devices(&context, &pPlaybackInfos, &playbackCount,
+                             &pCaptureInfos, &captureCount) != MA_SUCCESS) {
+    spdlog::error("Error getting devices");
+    throw std::runtime_error("ma_context_get_devices()");
+  }
+
+  int playback_device, capture_device;
+
+  std::cout << "Playback Devices:\n";
+  for (ma_uint32 iDevice = 0; iDevice < playbackCount; iDevice += 1) {
+    std::cout << iDevice << " - " << pPlaybackInfos[iDevice].name << std::endl;
+  }
+  std::cout << "----------------------------\nPlayback device: ";
+  std::cin >> playback_device;
+
+  std::cout << "\nCapture Devices:\n";
+  for (ma_uint32 iDevice = 0; iDevice < captureCount; iDevice += 1) {
+    std::cout << iDevice << " - " << pCaptureInfos[iDevice].name << std::endl;
+  }
+  std::cout << "----------------------------\nCapture device: ";
+  std::cin >> capture_device;
+
   client.setup_main_connection();
   client.setup_audio_connection();
+  client.setup_interaction();
 
   int error;
   OpusEncoder *encoder_state =
@@ -176,8 +255,10 @@ int main(int argc, char **argv) {
         client.capture_data_handler(data);
       };
 
-  AudioInput *input = new AudioInput(encoder_state, client.cb_data);
-  AudioOutput *output = new AudioOutput(decoder_state, client.cb_data);
+  AudioInput *input = new AudioInput(encoder_state, client.cb_data,
+                                     pCaptureInfos[capture_device].id);
+  AudioOutput *output = new AudioOutput(decoder_state, client.cb_data,
+                                        pPlaybackInfos[playback_device].id);
 
   client.input = input;
   client.output = output;
@@ -185,8 +266,18 @@ int main(int argc, char **argv) {
   client.input->start();
   client.output->start();
 
-  while (true)
-    client.process();
+  print_interaction_menu();
+
+  while (client.process())
+    continue;
 
   client.input->stop();
+  client.output->stop();
+  ma_rb_uninit(client.cb_data->ring_buffer);
+  opus_encoder_destroy(client.cb_data->encoder_state);
+  opus_decoder_destroy(client.cb_data->decoder_state);
+  delete client.cb_data;
+
+  spdlog::info("Client shutdown");
+  spdlog::shutdown();
 }

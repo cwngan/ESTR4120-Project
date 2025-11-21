@@ -47,7 +47,8 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
   (void)pInput;
 }
 
-AudioOutput::AudioOutput(OpusDecoder *_decoder_state, CallbackData *_cb_data) {
+AudioOutput::AudioOutput(OpusDecoder *_decoder_state, CallbackData *_cb_data,
+                         ma_device_id device_id) {
   cb_data = _cb_data;
   decoder_state = _decoder_state;
 
@@ -55,6 +56,7 @@ AudioOutput::AudioOutput(OpusDecoder *_decoder_state, CallbackData *_cb_data) {
       ma_device_config_init(ma_device_type_playback);
   device = new ma_device;
 
+  device_config.playback.pDeviceID = &device_id;
   device_config.playback.format = ma_format_f32;
   device_config.playback.channels = 2;
   device_config.sampleRate = SAMPLE_RATE;

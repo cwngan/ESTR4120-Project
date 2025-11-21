@@ -11,7 +11,8 @@ struct AudioInput {
   OpusEncoder *encoder_state;
   CallbackData *cb_data;
 
-  AudioInput(OpusEncoder *_encoder_state, CallbackData *_cb_data);
+  AudioInput(OpusEncoder *_encoder_state, CallbackData *_cb_data,
+             ma_device_id device_id);
 
   void start();
   void stop();

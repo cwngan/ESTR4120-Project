@@ -8,7 +8,7 @@
 #include <vector>
 
 #define SAMPLE_RATE 48000
-#define BITRATE 64000
+#define BITRATE 256000
 #define FRAME_COUNT 480
 #define JITTER_DELAY 2
 #define MAX_DELAY 10
