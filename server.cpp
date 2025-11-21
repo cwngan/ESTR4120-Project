@@ -2,6 +2,7 @@
 #include "cxxopts.hpp"
 #include "spdlog/common.h"
 #include "spdlog/spdlog.h"
+#include "utils.h"
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -9,6 +10,7 @@
 #include <netdb.h>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -17,7 +19,8 @@
 ServerOptions::ServerOptions() : opts("server") {
   // clang-format off
   opts.add_options()
-    ("p,port", "Port of the server", cxxopts::value<std::string>())
+    ("p,port", "Port of the main server", cxxopts::value<std::string>())
+    ("a,audio-port", "Port of the audio server", cxxopts::value<std::string>())
     ("help", "Print help", cxxopts::value<bool>()->default_value("false"));
   // clang-format on
 }
@@ -36,34 +39,12 @@ void ServerOptions::parse_options(int argc, char **argv) {
     return;
 
   port = result["port"].as<std::string>();
+  audio_port = result["audio-port"].as<std::string>();
 }
 
 void MainServer::setup() {
-  addrinfo hints, *res;
-  memset(&hints, 0, sizeof(addrinfo));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE;
-
-  spdlog::debug("Getting addrinfo at port {}", options.port);
-
-  if (getaddrinfo(NULL, options.port.c_str(), &hints, &res))
-    throw std::runtime_error("Error getting addr info");
-
-  int sock_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (sock_fd == -1)
-    throw std::runtime_error("Error creating socket");
-
-  int yes = 1;
-  setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-
-  if (bind(sock_fd, res->ai_addr, res->ai_addrlen) == -1)
-    throw std::runtime_error("Error binding socket to port.");
-
-  if (listen(sock_fd, BACKLOG) == -1)
-    throw std::runtime_error("Error listening for connection.");
-
-  spdlog::info("Main server started on port {}", options.port);
+  int sock_fd = create_server_socket(options.port, SOCK_STREAM, BACKLOG);
+  spdlog::info("Main STREAM server started on port {}", options.port);
 
   set_nonblocking(sock_fd);
   server_fd = sock_fd;
@@ -73,17 +54,22 @@ void MainServer::setup() {
   event.events = EPOLLIN;
   event.data.ptr = new ServerEvent;
   event.data.fd = server_fd;
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &event) == -1)
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &event) < 0)
     throw std::runtime_error("epoll_ctl: server_fd");
+
+  audio_server = new AudioServer;
+  audio_server->main_server = this;
+  audio_server->setup();
 }
 
 void MainServer::process() {
-  int n_events = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+  int n_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
   if (n_events < 0)
     throw std::runtime_error("epoll_wait()");
 
   for (int i = 0; i < n_events; i++) {
-    if (events[i].data.fd == server_fd) {
+    int fd = events[i].data.fd;
+    if (fd == server_fd) {
       // main socket acitivity (connection)
       while (true) {
         sockaddr_storage client_addr;
@@ -98,10 +84,9 @@ void MainServer::process() {
 
         set_nonblocking(client_fd);
 
-        Client *client = new Client{
-            .fd = client_fd, .addr = client_addr, .addr_len = client_len};
-        client->hostname = std::vector<char>(NI_MAXHOST);
-        client->service = std::vector<char>(NI_MAXSERV);
+        Client *client = new Client{.main_fd = client_fd,
+                                    .main_addr = client_addr,
+                                    .main_addr_len = client_len};
         epoll_event event;
         event.events = EPOLLIN;
         event.data.fd = client_fd;
@@ -111,15 +96,24 @@ void MainServer::process() {
           throw std::runtime_error("Error adding client socket to epoll");
         }
 
-        if (getnameinfo(reinterpret_cast<sockaddr *>(&client->addr),
-                        client->addr_len, client->hostname.data(),
-                        client->hostname.size(), client->service.data(),
-                        client->service.size(),
+        std::vector<char> raw_hostname(NI_MAXHOST);
+        std::vector<char> raw_service(NI_MAXSERV);
+
+        if (getnameinfo(reinterpret_cast<sockaddr *>(&client->main_addr),
+                        client->main_addr_len, raw_hostname.data(),
+                        raw_hostname.size(), raw_service.data(),
+                        raw_service.size(),
                         NI_NUMERICHOST | NI_NUMERICSERV) < 0)
           throw std::runtime_error("Error getting information of client");
-        spdlog::info("Client {}:{} connected", client->hostname.data(),
-                     client->service.data());
+        client->hostname =
+            std::string(raw_hostname.begin(), raw_hostname.end());
+        client->service = std::string(raw_service.begin(), raw_service.end());
+        spdlog::info("Client {}:{} connected fd {}", client->hostname,
+                     client->service, client_fd);
       }
+    } else if (fd == audio_server->fd) {
+      // spdlog::debug("audio server activity");
+      audio_server->handle_event();
     } else {
       // client activity
       Client *client = static_cast<Client *>(events[i].data.ptr);
@@ -130,17 +124,15 @@ void MainServer::process() {
 
 void MainServer::handle_client(Client *client) {
   std::vector<char> raw_packet(MAX_PACKET_SIZE);
-  ssize_t size = recv(client->fd, raw_packet.data(), MAX_PACKET_SIZE, 0);
+  ssize_t size = recv(client->main_fd, raw_packet.data(), MAX_PACKET_SIZE, 0);
   if (size < 0) {
     spdlog::error("Error receiving data from {}:{}. Reason: {}",
-                  client->hostname.data(), client->service.data(),
-                  strerror(errno));
+                  client->hostname, client->service, strerror(errno));
   }
   if (size <= 0) {
-    spdlog::info("{}:{} disconnected", client->hostname.data(),
-                 client->service.data());
-    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
-    close(client->fd);
+    spdlog::info("{}:{} disconnected", client->hostname, client->service);
+    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->main_fd, NULL);
+    close(client->main_fd);
     delete client;
     return;
   }
@@ -151,42 +143,28 @@ void MainServer::handle_client(Client *client) {
   memcpy(&header, raw_packet.data(), sizeof(header));
 
   switch (header.type) {
-  case PacketHeader::Type::Audio:
-    handle_audio_packet(raw_packet);
-    break;
   case PacketHeader::Type::Connect:
     handle_connect_packet(client, raw_packet);
     break;
   }
 };
 
-void MainServer::handle_audio_packet(std::vector<char> &raw_packet) {
-  AudioPacketHeader audio_header;
-  memcpy(&audio_header, raw_packet.data() + sizeof(PacketHeader),
-         sizeof(audio_header));
-  std::vector<char> audio_data(audio_header.data_length);
-  memcpy(audio_data.data(),
-         raw_packet.data() + sizeof(PacketHeader) + sizeof(AudioPacketHeader),
-         audio_header.data_length);
-  // to do: process the data
-}
-
 void MainServer::handle_connect_packet(Client *client,
                                        std::vector<char> &raw_packet) {
-  spdlog::info("Received connect packet from {}:{}", client->hostname.data(),
-               client->service.data());
-  clients.push_back(client->addr);
+  spdlog::info("Received connect packet from {}:{}", client->hostname,
+               client->service);
+  clients.push_back(client);
   ConnectResponsePacket res{.id =
                                 static_cast<unsigned int>(clients.size() - 1)};
 
-  spdlog::debug("Assigning client {}:{} to id {}", client->hostname.data(),
-                client->service.data(), res.id);
+  spdlog::info("Assigning client {}:{} to id {}", client->hostname,
+               client->service, res.id);
 
-  send(client->fd, &res, sizeof(res), 0);
+  send(client->main_fd, &res, sizeof(res), 0);
 }
 
 int main(int argc, char **argv) {
-  spdlog::set_level(spdlog::level::debug);
+  // spdlog::set_level(spdlog::level::debug);
 
   ServerOptions options;
   options.parse_options(argc, argv);

@@ -1,51 +1,28 @@
 #include "client.h"
-#include "audio_input.h"
-#include "audio_output.h"
+#include "audio_common.h"
 #include "common.h"
 #include "cxxopts.hpp"
+#include "spdlog/common.h"
 #include "spdlog/spdlog.h"
+#include "utils.h"
 
+#include <cstddef>
+#include <fstream>
 #include <iostream>
 #include <netdb.h>
 #include <opus.h>
 #include <opus_defines.h>
 #include <stdexcept>
-
-int loopback_audio(OpusEncoder *encoder_state, OpusDecoder *decoder_state) {
-
-  CallbackData *cb_data = new CallbackData;
-  cb_data->encoder_state = encoder_state;
-  cb_data->decoder_state = decoder_state;
-  cb_data->ring_buffer = NULL;
-
-  ma_device *input_device = create_input_device(cb_data);
-  ma_device *output_device = create_output_device(cb_data);
-
-  opus_encoder_ctl(encoder_state, OPUS_SET_BITRATE(BITRATE));
-  opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(BITRATE));
-
-  ma_device_start(output_device);
-  ma_device_start(input_device);
-
-  std::cout << "Press enter to quit..." << std::endl;
-  getchar();
-
-  ma_device_stop(output_device);
-  ma_device_uninit(output_device);
-  ma_device_stop(input_device);
-  ma_device_uninit(input_device);
-
-  ma_rb_uninit(cb_data->ring_buffer);
-  delete cb_data;
-
-  return 0;
-}
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <vector>
 
 ClientOptions::ClientOptions() : opts("client") {
   // clang-format off
   opts.add_options()
     ("h,hostname", "Hostname of the server", cxxopts::value<std::string>())
     ("p,port", "Port of the server", cxxopts::value<std::string>())
+    ("a,audio-port", "Port of the audio server", cxxopts::value<std::string>())
     ("help", "Print help", cxxopts::value<bool>()->default_value("false"));
   // clang-format on
 }
@@ -62,68 +39,154 @@ void ClientOptions::parse_options(int argc, char **argv) {
 
   hostname = result["hostname"].as<std::string>();
   port = result["port"].as<std::string>();
+  audio_port = result["audio-port"].as<std::string>();
 }
 
-void Client::setup() {
-  addrinfo hints, *res;
-  memset(&hints, 0, sizeof(addrinfo));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE;
-
-  spdlog::debug("Getting addrinfo at port {}", options.port);
-
-  if (getaddrinfo(options.hostname.c_str(), options.port.c_str(), &hints, &res))
-    throw std::runtime_error("Error getting addr info");
-
-  int sock_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (sock_fd == -1)
-    throw std::runtime_error("Error creating socket");
-
-  int yes = 1;
-  setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-
-  if (connect(sock_fd, res->ai_addr, res->ai_addrlen) < 0)
-    throw std::runtime_error("Error connecting to server");
-
+void Client::setup_main_connection() {
+  main_fd = create_client_socket(options.hostname, options.port, SOCK_STREAM);
   spdlog::info("Client started");
 
-  fd = sock_fd;
-}
-
-void Client::init_connect() {
   PacketHeader header{.type = PacketHeader::Type::Connect};
-  if (send(fd, &header, sizeof(header), 0) < 0)
+  if (send(main_fd, &header, sizeof(header), 0) < 0)
     throw std::runtime_error("Error sending connection init packet");
   spdlog::info("Sent connection init packet");
 
   ConnectResponsePacket response;
-  if (recv(fd, &response, sizeof(response), 0) < 0)
+  if (recv(main_fd, &response, sizeof(response), 0) < 0)
     throw std::runtime_error("Error receiving connection init response packet");
 
   spdlog::info("Assigned id: {}", response.id);
   client_id = response.id;
 }
 
-void Client::process() {}
+void Client::setup_audio_connection() {
+  audio_fd =
+      create_client_socket(options.hostname, options.audio_port, SOCK_DGRAM);
+
+  set_nonblocking(audio_fd);
+  spdlog::info("Audio server socket established");
+
+  AudioPacketHeader header{.type = AudioPacketHeader::Type::Connect,
+                           .client_id = client_id};
+  send(audio_fd, &header, sizeof(header), 0);
+
+  AudioConnectResponsePacket response;
+  recv(main_fd, &response, sizeof(response), 0);
+
+  epoll_fd = epoll_create1(0);
+  epoll_event event;
+  event.events = EPOLLIN;
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, audio_fd, &event) < 0)
+    throw std::runtime_error("Error listening for events on audio fd");
+
+  if (!response.success)
+    throw std::runtime_error("Failed to connect audio server");
+
+  spdlog::info("Successfully connected to audio server");
+}
+
+void Client::process() {
+  epoll_event *events = new epoll_event[EPOLL_MAX_EVENTS];
+  spdlog::debug("Waiting for audio fd events...");
+  int n_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
+  for (int i = 0; i < n_events; i++) {
+    spdlog::debug("Audio fd activity");
+    std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
+    int size = recv(audio_fd, buffer.data(), MAX_PACKET_SIZE, 0);
+    if (size < -1) {
+      spdlog::error("Error receiving data from audio server");
+      continue;
+    }
+    buffer.resize(size);
+    AudioPacketHeader header;
+    memcpy(&header, buffer.data(), sizeof(header));
+    if (header.type != AudioPacketHeader::Type::Data) {
+      spdlog::error("Unsupported packet type from audio server");
+      continue;
+    }
+    if (!cb_data->ring_buffer) {
+      spdlog::debug("Ring buffer not init yet");
+      continue;
+    }
+    AudioDataPacketHeader data_header;
+    memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
+    std::vector<unsigned char> data(data_header.data_length);
+    memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
+           data.size());
+
+    void *write_ptr;
+    size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
+    size_t bytes_to_write = target_bytes_to_write;
+    if (ma_rb_acquire_write(cb_data->ring_buffer, &bytes_to_write,
+                            &write_ptr) != MA_SUCCESS ||
+        bytes_to_write != target_bytes_to_write) {
+      return;
+    }
+
+    unsigned short *data_length = static_cast<unsigned short *>(write_ptr);
+    unsigned char *write_buffer_ptr =
+        static_cast<unsigned char *>(write_ptr) + sizeof(*data_length);
+    *data_length = data_header.data_length;
+    memcpy(write_buffer_ptr, data.data(), data_header.data_length);
+    ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
+    spdlog::debug("write {} bytes of audio data in ring buffer", *data_length);
+  }
+}
+
+void Client::capture_data_handler(std::vector<unsigned char> &data) {
+  spdlog::debug("captured audio data of {} bytes", data.size());
+  AudioPacketHeader header{.type = AudioPacketHeader::Type::Data,
+                           .client_id = client_id};
+  AudioDataPacketHeader data_header{.dest_client = client_id,
+                                    .data_length = data.size()};
+  int packet_size = sizeof(header) + sizeof(data_header) + data.size();
+  unsigned char *packet = new unsigned char[packet_size];
+  memcpy(packet, &header, sizeof(header));
+  memcpy(packet + sizeof(header), &data_header, sizeof(data_header));
+  memcpy(packet + sizeof(header) + sizeof(data_header), data.data(),
+         data.size());
+  send(audio_fd, packet, packet_size, 0);
+}
 
 int main(int argc, char **argv) {
+  // spdlog::set_level(spdlog::level::debug);
+
   ClientOptions options;
   options.parse_options(argc, argv);
 
   Client client;
   client.options = options;
 
-  client.setup();
-  client.init_connect();
+  client.setup_main_connection();
+  client.setup_audio_connection();
+
+  int error;
+  OpusEncoder *encoder_state =
+      opus_encoder_create(SAMPLE_RATE, 2, OPUS_APPLICATION_AUDIO, &error);
+  OpusDecoder *decoder_state = opus_decoder_create(SAMPLE_RATE, 2, &error);
+  opus_encoder_ctl(encoder_state, OPUS_SET_BITRATE(BITRATE));
+  opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(BITRATE));
+
+  client.cb_data = new CallbackData;
+  client.cb_data->encoder_state = encoder_state;
+  client.cb_data->decoder_state = decoder_state;
+  client.cb_data->ring_buffer = NULL;
+  client.cb_data->capture_data_handler =
+      [&client](std::vector<unsigned char> &data) {
+        client.capture_data_handler(data);
+      };
+
+  AudioInput *input = new AudioInput(encoder_state, client.cb_data);
+  AudioOutput *output = new AudioOutput(decoder_state, client.cb_data);
+
+  client.input = input;
+  client.output = output;
+
+  client.input->start();
+  client.output->start();
 
   while (true)
     client.process();
 
-  int error;
-  OpusEncoder *encoder_state =
-      opus_encoder_create(SAMPLE_RATE, 2, OPUS_APPLICATION_VOIP, &error);
-  OpusDecoder *decoder_state = opus_decoder_create(SAMPLE_RATE, 2, &error);
-
-  loopback_audio(encoder_state, decoder_state);
+  client.input->stop();
 }

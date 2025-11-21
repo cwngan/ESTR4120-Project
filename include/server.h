@@ -1,3 +1,5 @@
+#pragma once
+
 #include "common.h"
 #include "cxxopts.hpp"
 #include <netdb.h>
@@ -5,11 +7,11 @@
 #include <sys/socket.h>
 
 #define BACKLOG 10
-#define MAX_EVENTS 1
 
 struct ServerOptions {
   // Port of the server
   std::string port;
+  std::string audio_port;
   bool help;
 
   cxxopts::Options opts;
@@ -24,28 +26,55 @@ struct ServerOptions {
   void parse_options(int argc, char *argv[]);
 };
 
-struct Client {
-  int fd;
-  sockaddr_storage addr;
-  socklen_t addr_len;
-
-  std::vector<char> hostname;
-  std::vector<char> service;
+struct SocketInformation {
+  int sock_fd;
+  addrinfo *addr;
 };
+
+struct Client {
+  int main_fd;
+  bool dgram_connected = false;
+
+  sockaddr_storage main_addr;
+  socklen_t main_addr_len;
+
+  std::string hostname;
+  std::string service;
+
+  sockaddr_storage audio_addr;
+  socklen_t audio_addr_len;
+
+  std::string audio_hostname;
+  std::string audio_service;
+};
+
+struct AudioServer;
 
 struct MainServer {
   ServerOptions options;
-  std::vector<sockaddr_storage> clients;
+  std::vector<Client *> clients;
+  AudioServer *audio_server;
 
   int server_fd;
   int epoll_fd;
-  epoll_event events[MAX_EVENTS];
+  epoll_event events[EPOLL_MAX_EVENTS];
 
   void setup();
   void process();
   void handle_client(Client *client);
   void handle_connect_packet(Client *client, std::vector<char> &raw_packet);
-  void handle_audio_packet(std::vector<char> &raw_packet);
+};
+
+struct AudioServer {
+  MainServer *main_server;
+
+  int fd;
+
+  void setup();
+  void handle_event();
+  void handle_connect_packet(Client *client, sockaddr_storage client_addr,
+                             socklen_t client_len);
+  void handle_data_packet(Client *client, std::vector<char> &raw_packet);
 };
 
 struct ServerEvent {};

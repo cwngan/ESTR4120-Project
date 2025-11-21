@@ -1,19 +1,29 @@
 #define MAX_PACKET_SIZE 1500
 #define MAX_DATA_SIZE 1396
+#define EPOLL_MAX_EVENTS 1
 
 struct PacketHeader {
-  enum Type { Audio, Connect };
+  enum Type { Connect };
   Type type;
-};
-
-struct AudioPacketHeader {
-  unsigned int src_client;
-  unsigned int dest_client;
-  unsigned int data_length;
 };
 
 struct ConnectResponsePacket {
   unsigned int id;
+};
+
+struct AudioPacketHeader {
+  enum Type { Connect, Data };
+  Type type;
+  unsigned int client_id;
+};
+
+struct AudioConnectResponsePacket {
+  bool success;
+};
+
+struct AudioDataPacketHeader {
+  unsigned int dest_client;
+  unsigned long data_length;
 };
 
 void set_nonblocking(int sock_fd);

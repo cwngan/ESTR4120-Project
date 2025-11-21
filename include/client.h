@@ -1,3 +1,6 @@
+#include "audio_common.h"
+#include "audio_input.h"
+#include "audio_output.h"
 #include "cxxopts.hpp"
 
 struct ClientOptions {
@@ -5,6 +8,8 @@ struct ClientOptions {
   std::string hostname;
   // Port of the server
   std::string port;
+  // Port of the audio server
+  std::string audio_port;
   bool help;
 
   cxxopts::Options opts;
@@ -21,12 +26,19 @@ struct ClientOptions {
 
 struct Client {
   ClientOptions options;
-  int fd;
+  int main_fd;
+  int audio_fd;
   int epoll_fd;
 
-  int client_id;
+  unsigned int client_id;
 
-  void setup();
+  AudioInput *input;
+  AudioOutput *output;
+  CallbackData *cb_data;
+
+  void setup_main_connection();
   void init_connect();
+  void setup_audio_connection();
   void process();
+  void capture_data_handler(std::vector<unsigned char> &data);
 };
