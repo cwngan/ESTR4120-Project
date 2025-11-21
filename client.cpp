@@ -111,79 +111,95 @@ bool Client::process() {
   epoll_event events[EPOLL_MAX_EVENTS];
   spdlog::debug("Waiting for audio fd events...");
   int n_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
-  for (int i = 0; i < n_events; i++) {
+  bool status = true;
+  for (int i = 0; i < n_events && status; i++) {
+    status = true;
     if (events[i].data.fd == STDIN_FILENO) {
-      std::string line;
-      std::getline(std::cin, line);
-      if (line.size() == 0)
-        continue;
-
-      std::vector<std::string> actions;
-      std::stringstream ss(line);
-      std::string word;
-      while (ss >> word)
-        actions.push_back(word);
-
-      if (actions[0] == "0")
-        return false;
-
-      if (actions[0] == "1") {
-        get_clients();
-      } else if (actions[0] == "2" && actions.size() >= 2) {
-        connect_client(std::stoi(actions[1]));
-      } else if (actions[0] == "3" && actions.size() >= 2) {
-        connect_client(std::stoi(actions[1]));
-      } else if (actions[0] == "4") {
-        start_stream();
-      } else {
-        std::cout << "Invalid action!\n";
-      }
-      print_interaction_menu();
+      status = process_interaction();
+    } else if (events[i].data.fd == main_fd) {
+      process_main_packet();
     } else {
-      spdlog::debug("Audio fd activity");
-      std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
-      int size = recv(audio_fd, buffer.data(), MAX_PACKET_SIZE, 0);
-      if (size < -1) {
-        spdlog::error("Error receiving data from audio server");
-        continue;
-      }
-      buffer.resize(size);
-      AudioPacketHeader header;
-      memcpy(&header, buffer.data(), sizeof(header));
-      if (header.type != AudioPacketHeader::Type::Data) {
-        spdlog::error("Unsupported packet type from audio server");
-        continue;
-      }
-      if (!cb_data->ring_buffer) {
-        spdlog::debug("Ring buffer not init yet");
-        continue;
-      }
-      AudioDataPacketHeader data_header;
-      memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
-      std::vector<unsigned char> data(data_header.data_length);
-      memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
-             data.size());
-
-      void *write_ptr;
-      size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
-      size_t bytes_to_write = target_bytes_to_write;
-      if (ma_rb_acquire_write(cb_data->ring_buffer, &bytes_to_write,
-                              &write_ptr) != MA_SUCCESS ||
-          bytes_to_write != target_bytes_to_write) {
-        return true;
-      }
-
-      unsigned short *data_length = static_cast<unsigned short *>(write_ptr);
-      unsigned char *write_buffer_ptr =
-          static_cast<unsigned char *>(write_ptr) + sizeof(*data_length);
-      *data_length = data_header.data_length;
-      memcpy(write_buffer_ptr, data.data(), data_header.data_length);
-      ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
-      spdlog::debug("write {} bytes of audio data in ring buffer",
-                    *data_length);
+      process_audio_packet();
     }
   }
+  return status;
+}
+
+bool Client::process_interaction() {
+  spdlog::debug("STDIN activity");
+  std::string line;
+  std::getline(std::cin, line);
+  if (line.size() == 0)
+    return true;
+
+  std::vector<std::string> actions;
+  std::stringstream ss(line);
+  std::string word;
+  while (ss >> word)
+    actions.push_back(word);
+
+  if (actions[0] == "0")
+    return false;
+
+  if (actions[0] == "1") {
+    get_clients();
+  } else if (actions[0] == "2" && actions.size() >= 2) {
+    connect_client(std::stoi(actions[1]));
+  } else if (actions[0] == "3" && actions.size() >= 2) {
+    connect_client(std::stoi(actions[1]));
+  } else if (actions[0] == "4") {
+    start_stream();
+  } else {
+    std::cout << "Invalid action!\n";
+  }
+  print_interaction_menu();
+
   return true;
+}
+
+void Client::process_main_packet() { spdlog::debug("Main fd activity"); }
+
+void Client::process_audio_packet() {
+  spdlog::debug("Audio fd activity");
+  std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
+  int size = recv(audio_fd, buffer.data(), MAX_PACKET_SIZE, 0);
+  if (size < -1) {
+    spdlog::error("Error receiving data from audio server");
+    return;
+  }
+  buffer.resize(size);
+  AudioPacketHeader header;
+  memcpy(&header, buffer.data(), sizeof(header));
+  if (header.type != AudioPacketHeader::Type::Data) {
+    spdlog::error("Unsupported packet type from audio server");
+    return;
+  }
+  if (!cb_data->ring_buffer) {
+    spdlog::debug("Ring buffer not init yet");
+    return;
+  }
+  AudioDataPacketHeader data_header;
+  memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
+  std::vector<unsigned char> data(data_header.data_length);
+  memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
+         data.size());
+
+  void *write_ptr;
+  size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
+  size_t bytes_to_write = target_bytes_to_write;
+  if (ma_rb_acquire_write(cb_data->ring_buffer, &bytes_to_write, &write_ptr) !=
+          MA_SUCCESS ||
+      bytes_to_write != target_bytes_to_write) {
+    return;
+  }
+
+  unsigned short *data_length = static_cast<unsigned short *>(write_ptr);
+  unsigned char *write_buffer_ptr =
+      static_cast<unsigned char *>(write_ptr) + sizeof(*data_length);
+  *data_length = data_header.data_length;
+  memcpy(write_buffer_ptr, data.data(), data_header.data_length);
+  ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
+  spdlog::debug("write {} bytes of audio data in ring buffer", *data_length);
 }
 
 void Client::capture_data_handler(std::vector<unsigned char> &data) {
@@ -259,6 +275,12 @@ int main(int argc, char **argv) {
   client.setup_main_connection();
   client.setup_audio_connection();
   client.setup_interaction();
+
+  set_nonblocking(client.main_fd);
+  epoll_event event;
+  event.events = EPOLLIN;
+  event.data.fd = client.main_fd;
+  epoll_ctl(client.epoll_fd, EPOLL_CTL_ADD, client.main_fd, &event);
 
   int error;
   OpusEncoder *encoder_state =

@@ -42,6 +42,10 @@ struct Client {
   void setup_interaction();
   bool process();
 
+  bool process_interaction();
+  void process_main_packet();
+  void process_audio_packet();
+
   void capture_data_handler(std::vector<unsigned char> &data);
   void get_clients();
   void connect_client(int id);
