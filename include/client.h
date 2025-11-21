@@ -41,5 +41,11 @@ struct Client {
   void setup_audio_connection();
   void setup_interaction();
   bool process();
+
   void capture_data_handler(std::vector<unsigned char> &data);
+  void get_clients();
+  void connect_client(int id);
+  void disconnect_client(int id);
+  void start_stream();
+  void stop_stream();
 };

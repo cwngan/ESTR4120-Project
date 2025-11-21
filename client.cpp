@@ -15,6 +15,7 @@
 #include <opus_defines.h>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -123,10 +124,20 @@ bool Client::process() {
       while (ss >> word)
         actions.push_back(word);
 
-      if (actions[0] == "0") {
+      if (actions[0] == "0")
         return false;
-      }
 
+      if (actions[0] == "1") {
+        get_clients();
+      } else if (actions[0] == "2" && actions.size() >= 2) {
+        connect_client(std::stoi(actions[1]));
+      } else if (actions[0] == "3" && actions.size() >= 2) {
+        connect_client(std::stoi(actions[1]));
+      } else if (actions[0] == "4") {
+        start_stream();
+      } else {
+        std::cout << "Invalid action!\n";
+      }
       print_interaction_menu();
     } else {
       spdlog::debug("Audio fd activity");
@@ -189,6 +200,16 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
          data.size());
   send(audio_fd, packet, packet_size, 0);
 }
+
+void Client::get_clients() {}
+
+void Client::connect_client(int id) {}
+
+void Client::disconnect_client(int id) {}
+
+void Client::start_stream() {}
+
+void Client::stop_stream() {}
 
 int main(int argc, char **argv) {
   // spdlog::set_level(spdlog::level::debug);
