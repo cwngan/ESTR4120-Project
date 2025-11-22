@@ -161,6 +161,12 @@ void MainServer::handle_client(Client *client) {
   case RequestPacketHeader::Type::DisconnectClient:
     handle_disconnect_client_packet(client, raw_packet);
     break;
+  case RequestPacketHeader::Type::Mute:
+    handle_mute(client, raw_packet);
+    break;
+  case RequestPacketHeader::Type::Deafen:
+    handle_deafen(client, raw_packet);
+    break;
   }
 };
 
@@ -216,7 +222,9 @@ void MainServer::handle_get_connected_clients_packet(
       continue;
     GetConnectionsResponsePacketEntry entry{
         .client_id = id,
-        .length = static_cast<unsigned int>(connection.size())};
+        .length = static_cast<unsigned int>(connection.size()),
+        .muted = client->muted,
+        .deafened = client->deafened};
     memcpy(buffer + offset, &entry, sizeof(entry));
     offset += sizeof(entry);
     for (int id : connection) {
@@ -273,6 +281,48 @@ void MainServer::handle_disconnect_client_packet(
   } else {
     connections[client->id].erase(packet.id);
     connections[packet.id].erase(client->id);
+    res.status = true;
+  }
+  memcpy(buf + sizeof(res_header), &res, sizeof(res));
+  send(client->main_fd, buf, sizeof(buf), 0);
+}
+
+void MainServer::handle_mute(Client *client, std::vector<char> &raw_packet) {
+  spdlog::debug("Received mute packet");
+  int offset = sizeof(RequestPacketHeader);
+  MuteRequestPacket packet;
+  memcpy(&packet, raw_packet.data() + offset, sizeof(packet));
+
+  char buf[sizeof(ResponsePacketHeader) + sizeof(MuteResponsePacket)];
+  ResponsePacketHeader res_header{.type = ResponsePacketHeader::Type::Mute};
+  memcpy(buf, &res_header, sizeof(res_header));
+
+  MuteResponsePacket res;
+  if (client->muted == packet.mute)
+    res.status = false;
+  else {
+    client->muted = packet.mute;
+    res.status = true;
+  }
+  memcpy(buf + sizeof(res_header), &res, sizeof(res));
+  send(client->main_fd, buf, sizeof(buf), 0);
+}
+
+void MainServer::handle_deafen(Client *client, std::vector<char> &raw_packet) {
+  spdlog::debug("Received deafen packet");
+  int offset = sizeof(RequestPacketHeader);
+  DeafenRequestPacket packet;
+  memcpy(&packet, raw_packet.data() + offset, sizeof(packet));
+
+  char buf[sizeof(ResponsePacketHeader) + sizeof(DeafenResponsePacket)];
+  ResponsePacketHeader res_header{.type = ResponsePacketHeader::Type::Deafen};
+  memcpy(buf, &res_header, sizeof(res_header));
+
+  DeafenResponsePacket res;
+  if (client->deafened == packet.deafen)
+    res.status = false;
+  else {
+    client->deafened = packet.deafen;
     res.status = true;
   }
   memcpy(buf + sizeof(res_header), &res, sizeof(res));

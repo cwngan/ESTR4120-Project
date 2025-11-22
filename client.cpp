@@ -201,42 +201,40 @@ bool Client::process_main_packet() {
     GetConnectionsResponsePacketHeader content_header;
     memcpy(&content_header, buffer.data() + offset, sizeof(content_header));
     offset += sizeof(content_header);
-    std::unordered_map<int, std::unordered_set<unsigned int>> connections;
 
     spdlog::debug("header.clients: {}", content_header.clients);
+
+    std::cout << "\nCurrent connections\n";
+    std::cout << "----------------------------\n";
     for (int i = 0; i < content_header.clients; i++) {
       GetConnectionsResponsePacketEntry entry;
       memcpy(&entry, buffer.data() + offset, sizeof(entry));
       offset += sizeof(entry);
+      std::cout << entry.client_id;
+      if (entry.muted || entry.deafened) {
+        std::cout << " (";
+        if (entry.muted)
+          std::cout << "m";
+        if (entry.deafened)
+          std::cout << "d";
+        std::cout << ")";
+      }
+      std::cout << "\t - ";
       spdlog::debug("entry.length: {}, entry.client_id: {}", entry.length,
                     entry.client_id);
-      connections[entry.client_id] = {};
+      if (entry.length == 0)
+        std::cout << "No connected client";
       for (int j = 0; j < entry.length; j++) {
         int id;
         memcpy(&id, buffer.data() + offset, sizeof(id));
         offset += sizeof(id);
-        connections[entry.client_id].insert(id);
+        std::cout << id;
+        if (j < entry.length - 1)
+          std::cout << ", ";
       }
+      std::cout << std::endl;
     }
 
-    std::cout << "\nCurrent connections\n";
-    std::cout << "----------------------------\n";
-    for (auto &connection : connections) {
-      int id = connection.first;
-      auto &clients = connection.second;
-      std::cout << id << "\t - ";
-      if (clients.size() == 0)
-        std::cout << "No connected clients";
-
-      for (auto it = clients.begin(); it != clients.end(); it++) {
-        if (std::next(it) == clients.end())
-          std::cout << *it;
-        else
-          std::cout << *it << ", ";
-      }
-
-      std::cout << "\n";
-    }
     break;
   }
   case ResponsePacketHeader::Type::ConnectClient: {
@@ -256,6 +254,26 @@ bool Client::process_main_packet() {
       std::cout << "Successfully disconnected from client" << std::endl;
     } else {
       std::cout << "Failed to disconnect from client" << std::endl;
+    }
+    break;
+  }
+  case ResponsePacketHeader::Type::Mute: {
+    MuteResponsePacket res;
+    memcpy(&res, buffer.data() + offset, sizeof(res));
+    if (res.status) {
+      std::cout << "Successfully muted" << std::endl;
+    } else {
+      std::cout << "Failed to mute" << std::endl;
+    }
+    break;
+  }
+  case ResponsePacketHeader::Type::Deafen: {
+    DeafenResponsePacket res;
+    memcpy(&res, buffer.data() + offset, sizeof(res));
+    if (res.status) {
+      std::cout << "Successfully deafened" << std::endl;
+    } else {
+      std::cout << "Failed to deafen" << std::endl;
     }
     break;
   }
@@ -361,25 +379,61 @@ void Client::disconnect_client(int id) {
 void Client::mute() {
   input->pause();
   muted = true;
-  print_interaction_menu();
+
+  char buf[sizeof(RequestPacketHeader) + sizeof(MuteRequestPacket)];
+
+  RequestPacketHeader header{.type = RequestPacketHeader::Type::Mute};
+  memcpy(buf, &header, sizeof(header));
+
+  MuteRequestPacket req{.mute = true};
+  memcpy(buf + sizeof(header), &req, sizeof(req));
+
+  send(main_fd, buf, sizeof(buf), 0);
 }
 
 void Client::unmute() {
   input->start();
   muted = false;
-  print_interaction_menu();
+
+  char buf[sizeof(RequestPacketHeader) + sizeof(MuteRequestPacket)];
+
+  RequestPacketHeader header{.type = RequestPacketHeader::Type::Mute};
+  memcpy(buf, &header, sizeof(header));
+
+  MuteRequestPacket req{.mute = false};
+  memcpy(buf + sizeof(header), &req, sizeof(req));
+
+  send(main_fd, buf, sizeof(buf), 0);
 }
 
 void Client::deafen() {
   output->pause();
   deafened = true;
-  print_interaction_menu();
+
+  char buf[sizeof(RequestPacketHeader) + sizeof(DeafenRequestPacket)];
+
+  RequestPacketHeader header{.type = RequestPacketHeader::Type::Deafen};
+  memcpy(buf, &header, sizeof(header));
+
+  DeafenRequestPacket req{.deafen = true};
+  memcpy(buf + sizeof(header), &req, sizeof(req));
+
+  send(main_fd, buf, sizeof(buf), 0);
 }
 
 void Client::undeafen() {
   output->start();
   deafened = false;
-  print_interaction_menu();
+
+  char buf[sizeof(RequestPacketHeader) + sizeof(DeafenRequestPacket)];
+
+  RequestPacketHeader header{.type = RequestPacketHeader::Type::Deafen};
+  memcpy(buf, &header, sizeof(header));
+
+  DeafenRequestPacket req{.deafen = false};
+  memcpy(buf + sizeof(header), &req, sizeof(req));
+
+  send(main_fd, buf, sizeof(buf), 0);
 }
 
 int main(int argc, char **argv) {
@@ -415,14 +469,18 @@ int main(int argc, char **argv) {
 
   std::cout << "Playback Devices:\n";
   for (ma_uint32 iDevice = 0; iDevice < playbackCount; iDevice += 1) {
-    std::cout << iDevice << " - " << pPlaybackInfos[iDevice].name << std::endl;
+    std::cout << iDevice << " - " << pPlaybackInfos[iDevice].name
+              << (pPlaybackInfos[iDevice].isDefault ? " (default)" : "")
+              << std::endl;
   }
   std::cout << "----------------------------\nPlayback device: ";
   std::cin >> playback_device;
 
   std::cout << "\nCapture Devices:\n";
   for (ma_uint32 iDevice = 0; iDevice < captureCount; iDevice += 1) {
-    std::cout << iDevice << " - " << pCaptureInfos[iDevice].name << std::endl;
+    std::cout << iDevice << " - " << pCaptureInfos[iDevice].name
+              << (pCaptureInfos[iDevice].isDefault ? " (default)" : "")
+              << std::endl;
   }
   std::cout << "----------------------------\nCapture device: ";
   std::cin >> capture_device;

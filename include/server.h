@@ -38,6 +38,9 @@ struct Client {
   int id;
   bool dgram_connected = false;
 
+  bool muted;
+  bool deafened;
+
   sockaddr_storage main_addr;
   socklen_t main_addr_len;
 
@@ -74,6 +77,8 @@ struct MainServer {
                                     std::vector<char> &raw_packet);
   void handle_disconnect_client_packet(Client *client,
                                        std::vector<char> &raw_packet);
+  void handle_mute(Client *client, std::vector<char> &raw_packet);
+  void handle_deafen(Client *client, std::vector<char> &raw_packet);
 };
 
 struct AudioServer {

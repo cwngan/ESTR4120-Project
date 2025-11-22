@@ -3,12 +3,26 @@
 #define EPOLL_MAX_EVENTS 1
 
 struct RequestPacketHeader {
-  enum Type { Connect, GetConnections, ConnectClient, DisconnectClient };
+  enum Type {
+    Connect,
+    GetConnections,
+    ConnectClient,
+    DisconnectClient,
+    Mute,
+    Deafen
+  };
   Type type;
 };
 
 struct ResponsePacketHeader {
-  enum Type { Connect, GetConnections, ConnectClient, DisconnectClient };
+  enum Type {
+    Connect,
+    GetConnections,
+    ConnectClient,
+    DisconnectClient,
+    Mute,
+    Deafen
+  };
   Type type;
 };
 
@@ -23,6 +37,8 @@ struct GetConnectionsResponsePacketHeader {
 struct GetConnectionsResponsePacketEntry {
   int client_id;
   unsigned int length;
+  bool muted;
+  bool deafened;
 };
 
 struct ConnectClientRequestPacket {
@@ -38,6 +54,22 @@ struct DisconnectClientRequestPacket {
 };
 
 struct DisconnectClientResponsePacket {
+  bool status;
+};
+
+struct MuteRequestPacket {
+  bool mute;
+};
+
+struct MuteResponsePacket {
+  bool status;
+};
+
+struct DeafenRequestPacket {
+  bool deafen;
+};
+
+struct DeafenResponsePacket {
   bool status;
 };
 
