@@ -42,7 +42,7 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
                         static_cast<float *>(pOutput), frameCount, 0);
   ma_rb_commit_read(ringBuffer, bytes_to_read);
 
-  spdlog::debug("read {} bytes at {}", *size, read_ptr);
+  spdlog::trace("read {} bytes at {}", *size, read_ptr);
 
   (void)pInput;
 }

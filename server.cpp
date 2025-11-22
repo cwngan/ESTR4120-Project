@@ -112,7 +112,6 @@ void MainServer::process() {
                      client->service, client_fd);
       }
     } else if (fd == audio_server->fd) {
-      // spdlog::debug("audio server activity");
       audio_server->handle_event();
     } else {
       // client activity
@@ -164,7 +163,7 @@ void MainServer::handle_connect_packet(Client *client,
 }
 
 int main(int argc, char **argv) {
-  // spdlog::set_level(spdlog::level::debug);
+  spdlog::set_level(spdlog::level::debug);
 
   ServerOptions options;
   options.parse_options(argc, argv);

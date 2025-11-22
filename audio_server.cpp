@@ -31,7 +31,7 @@ void AudioServer::handle_event() {
     spdlog::error("Audio server error receving packet");
     return;
   }
-  spdlog::debug("Received audio packet of size {}", size);
+  spdlog::trace("Received audio packet of size {}", size);
   raw_packet.resize(size);
 
   AudioPacketHeader header;
@@ -43,7 +43,7 @@ void AudioServer::handle_event() {
     return;
   }
 
-  spdlog::debug("Received packet from client id {}", header.client_id);
+  spdlog::trace("Received packet from client id {}", header.client_id);
 
   Client *client = main_server->clients[header.client_id];
 
@@ -121,14 +121,14 @@ void AudioServer::handle_data_packet(Client *client,
   }
   Client *dest_client = main_server->clients[audio_header.dest_client];
 
-  spdlog::debug("Received data packet from {}:{}", client->audio_hostname,
+  spdlog::trace("Received data packet from {}:{}", client->audio_hostname,
                 client->audio_service);
-  spdlog::debug("dest_client: {}, data_length: {}", audio_header.dest_client,
+  spdlog::trace("dest_client: {}, data_length: {}", audio_header.dest_client,
                 audio_header.data_length);
   sendto(fd, raw_packet.data(), raw_packet.size(), 0,
          reinterpret_cast<sockaddr *>(&dest_client->audio_addr),
          dest_client->audio_addr_len);
-  spdlog::debug("Redirected data packet from {}:{} to {}:{}",
+  spdlog::trace("Redirected data packet from {}:{} to {}:{}",
                 client->audio_hostname, client->audio_service,
                 dest_client->audio_hostname, dest_client->audio_service);
 }

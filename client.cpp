@@ -109,7 +109,6 @@ void Client::setup_interaction() {
 
 bool Client::process() {
   epoll_event events[EPOLL_MAX_EVENTS];
-  spdlog::debug("Waiting for audio fd events...");
   int n_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
   bool status = true;
   for (int i = 0; i < n_events && status; i++) {
@@ -160,11 +159,12 @@ bool Client::process_interaction() {
 void Client::process_main_packet() { spdlog::debug("Main fd activity"); }
 
 void Client::process_audio_packet() {
-  spdlog::debug("Audio fd activity");
+  spdlog::trace("Audio fd activity");
   std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
   int size = recv(audio_fd, buffer.data(), MAX_PACKET_SIZE, 0);
-  if (size < -1) {
-    spdlog::error("Error receiving data from audio server");
+  if (size < 0) {
+    spdlog::error("Error receiving data from audio server. Reason: {}",
+                  strerror(errno));
     return;
   }
   buffer.resize(size);
@@ -199,11 +199,11 @@ void Client::process_audio_packet() {
   *data_length = data_header.data_length;
   memcpy(write_buffer_ptr, data.data(), data_header.data_length);
   ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
-  spdlog::debug("write {} bytes of audio data in ring buffer", *data_length);
+  spdlog::trace("write {} bytes of audio data in ring buffer", *data_length);
 }
 
 void Client::capture_data_handler(std::vector<unsigned char> &data) {
-  spdlog::debug("captured audio data of {} bytes", data.size());
+  spdlog::trace("captured audio data of {} bytes", data.size());
   AudioPacketHeader header{.type = AudioPacketHeader::Type::Data,
                            .client_id = client_id};
   AudioDataPacketHeader data_header{.dest_client = client_id,
@@ -228,7 +228,7 @@ void Client::start_stream() {}
 void Client::stop_stream() {}
 
 int main(int argc, char **argv) {
-  // spdlog::set_level(spdlog::level::debug);
+  spdlog::set_level(spdlog::level::debug);
   auto daily_logger =
       spdlog::daily_logger_mt("daily_logger", "logs/client.log");
   spdlog::set_default_logger(daily_logger);
