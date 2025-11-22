@@ -18,8 +18,13 @@ FetchContent_Declare(
   GIT_TAG v1.16.0
 )
 
-FetchContent_MakeAvailable(cxxopts)
-FetchContent_MakeAvailable(spdlog)
+FetchContent_Declare(
+  miniaudio
+  GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+  GIT_TAG 0.11.23
+)
+
+FetchContent_MakeAvailable(cxxopts spdlog miniaudio)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
@@ -33,6 +38,7 @@ if (OPUS_FOUND)
   target_link_libraries(client PRIVATE spdlog::spdlog)
   target_link_libraries(client PRIVATE dl)
   target_link_libraries(client PRIVATE cxxopts::cxxopts)
+  target_link_libraries(client PRIVATE miniaudio)
   target_include_directories(client PRIVATE include)
   target_include_directories(client PRIVATE ${OPUS_INCLUDE_DIRS})
 endif()
