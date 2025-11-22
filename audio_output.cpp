@@ -69,6 +69,7 @@ AudioOutput::AudioOutput(OpusDecoder *_decoder_state, CallbackData *_cb_data,
 }
 
 void AudioOutput::start() { ma_device_start(device); }
+void AudioOutput::pause() { ma_device_stop(device); }
 void AudioOutput::stop() {
   ma_device_stop(device);
   ma_device_uninit(device);

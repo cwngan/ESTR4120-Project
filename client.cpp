@@ -23,13 +23,16 @@
 #include <unordered_set>
 #include <vector>
 
-void print_interaction_menu() {
+void Client::print_interaction_menu() {
+  std::cout << std::endl;
+  std::cout << "Your client ID: " << client_id << std::endl;
   std::cout << std::endl;
   std::cout << "Interactive Menu" << std::endl;
   std::cout << "1\t - Print connected clients" << std::endl;
   std::cout << "2 <id>\t - Connect to clients" << std::endl;
   std::cout << "3 <id>\t - Disconnect from client" << std::endl;
-  std::cout << "4\t - Start streaming audio" << std::endl;
+  std::cout << "4\t - " << (muted ? "Unmute" : "Mute") << std::endl;
+  std::cout << "5\t - " << (deafened ? "Undeafen" : "Deafen") << std::endl;
   std::cout << "0\t - Quit" << std::endl;
   std::cout << "----------------------------\nEnter action: " << std::flush;
 }
@@ -123,9 +126,9 @@ bool Client::process() {
     if (events[i].data.fd == STDIN_FILENO) {
       status = process_interaction();
     } else if (events[i].data.fd == main_fd) {
-      process_main_packet();
+      status = process_main_packet();
     } else {
-      process_audio_packet();
+      status = process_audio_packet();
     }
   }
   return status;
@@ -152,9 +155,17 @@ bool Client::process_interaction() {
   } else if (actions[0] == "2" && actions.size() >= 2) {
     connect_client(std::stoi(actions[1]));
   } else if (actions[0] == "3" && actions.size() >= 2) {
-    connect_client(std::stoi(actions[1]));
+    disconnect_client(std::stoi(actions[1]));
   } else if (actions[0] == "4") {
-    start_stream();
+    if (muted)
+      unmute();
+    else
+      mute();
+  } else if (actions[0] == "5") {
+    if (deafened)
+      undeafen();
+    else
+      deafen();
   } else {
     std::cout << "Invalid action!\n";
   }
@@ -162,14 +173,17 @@ bool Client::process_interaction() {
   return true;
 }
 
-void Client::process_main_packet() {
+bool Client::process_main_packet() {
   spdlog::debug("Main fd activity");
   std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
   int size = recv(main_fd, buffer.data(), MAX_PACKET_SIZE, 0);
   if (size < 0) {
     spdlog::error("Error receiving data from main server. Reason: {}",
                   strerror(errno));
-    return;
+    return false;
+  } else if (size == 0) {
+    spdlog::info("Server disconnected");
+    return false;
   }
   buffer.resize(size);
   int offset = 0;
@@ -178,7 +192,12 @@ void Client::process_main_packet() {
   memcpy(&packet_header, buffer.data() + offset, sizeof(packet_header));
   offset += sizeof(packet_header);
 
-  if (packet_header.type == ResponsePacketHeader::Type::GetConnections) {
+  switch (packet_header.type) {
+  case ResponsePacketHeader::Type::Connect: {
+    // ignore connect response packets
+    break;
+  }
+  case ResponsePacketHeader::Type::GetConnections: {
     GetConnectionsResponsePacketHeader content_header;
     memcpy(&content_header, buffer.data() + offset, sizeof(content_header));
     offset += sizeof(content_header);
@@ -200,44 +219,74 @@ void Client::process_main_packet() {
       }
     }
 
-    std::cout << "Current connections\n";
+    std::cout << "\nCurrent connections\n";
     std::cout << "----------------------------\n";
     for (auto &connection : connections) {
       int id = connection.first;
       auto &clients = connection.second;
-      std::cout << id << "\t- ";
+      std::cout << id << "\t - ";
       if (clients.size() == 0)
-        std::cout << "No connected clients\n";
+        std::cout << "No connected clients";
 
-      for (int cid : clients)
-        std::cout << cid << ", ";
+      for (auto it = clients.begin(); it != clients.end(); it++) {
+        if (std::next(it) == clients.end())
+          std::cout << *it;
+        else
+          std::cout << *it << ", ";
+      }
 
       std::cout << "\n";
     }
+    break;
+  }
+  case ResponsePacketHeader::Type::ConnectClient: {
+    ConnectClientResponsePacket res;
+    memcpy(&res, buffer.data() + offset, sizeof(res));
+    if (res.status) {
+      std::cout << "Successfully connected to client" << std::endl;
+    } else {
+      std::cout << "Failed to connect to client" << std::endl;
+    }
+    break;
+  }
+  case ResponsePacketHeader::Type::DisconnectClient: {
+    DisconnectClientResponsePacket res;
+    memcpy(&res, buffer.data() + offset, sizeof(res));
+    if (res.status) {
+      std::cout << "Successfully disconnected from client" << std::endl;
+    } else {
+      std::cout << "Failed to disconnect from client" << std::endl;
+    }
+    break;
+  }
   }
 
   print_interaction_menu();
+  return true;
 }
 
-void Client::process_audio_packet() {
+bool Client::process_audio_packet() {
   spdlog::trace("Audio fd activity");
   std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
   int size = recv(audio_fd, buffer.data(), MAX_PACKET_SIZE, 0);
   if (size < 0) {
     spdlog::error("Error receiving data from audio server. Reason: {}",
                   strerror(errno));
-    return;
+    return false;
+  } else if (size == 0) {
+    spdlog::info("Audio server disconnected");
+    return false;
   }
   buffer.resize(size);
   AudioPacketHeader header;
   memcpy(&header, buffer.data(), sizeof(header));
   if (header.type != AudioPacketHeader::Type::Data) {
     spdlog::error("Unsupported packet type from audio server");
-    return;
+    return true;
   }
   if (!cb_data->ring_buffer) {
     spdlog::debug("Ring buffer not init yet");
-    return;
+    return true;
   }
   AudioDataPacketHeader data_header;
   memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
@@ -251,7 +300,7 @@ void Client::process_audio_packet() {
   if (ma_rb_acquire_write(cb_data->ring_buffer, &bytes_to_write, &write_ptr) !=
           MA_SUCCESS ||
       bytes_to_write != target_bytes_to_write) {
-    return;
+    return true;
   }
 
   unsigned short *data_length = static_cast<unsigned short *>(write_ptr);
@@ -261,14 +310,15 @@ void Client::process_audio_packet() {
   memcpy(write_buffer_ptr, data.data(), data_header.data_length);
   ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
   spdlog::trace("write {} bytes of audio data in ring buffer", *data_length);
+
+  return true;
 }
 
 void Client::capture_data_handler(std::vector<unsigned char> &data) {
   spdlog::trace("captured audio data of {} bytes", data.size());
   AudioPacketHeader header{.type = AudioPacketHeader::Type::Data,
                            .client_id = client_id};
-  AudioDataPacketHeader data_header{.dest_client = client_id,
-                                    .data_length = data.size()};
+  AudioDataPacketHeader data_header{.data_length = data.size()};
   int packet_size = sizeof(header) + sizeof(data_header) + data.size();
   unsigned char *packet = new unsigned char[packet_size];
   memcpy(packet, &header, sizeof(header));
@@ -283,13 +333,54 @@ void Client::get_connections() {
   send(main_fd, &header, sizeof(header), 0);
 }
 
-void Client::connect_client(int id) {}
+void Client::connect_client(int id) {
+  char buf[sizeof(RequestPacketHeader) + sizeof(ConnectClientRequestPacket)];
 
-void Client::disconnect_client(int id) {}
+  RequestPacketHeader header{.type = RequestPacketHeader::Type::ConnectClient};
+  memcpy(buf, &header, sizeof(header));
 
-void Client::start_stream() {}
+  ConnectClientRequestPacket req{.id = id};
+  memcpy(buf + sizeof(header), &req, sizeof(req));
 
-void Client::stop_stream() {}
+  send(main_fd, buf, sizeof(buf), 0);
+}
+
+void Client::disconnect_client(int id) {
+  char buf[sizeof(RequestPacketHeader) + sizeof(DisconnectClientRequestPacket)];
+
+  RequestPacketHeader header{.type =
+                                 RequestPacketHeader::Type::DisconnectClient};
+  memcpy(buf, &header, sizeof(header));
+
+  DisconnectClientRequestPacket req{.id = id};
+  memcpy(buf + sizeof(header), &req, sizeof(req));
+
+  send(main_fd, buf, sizeof(buf), 0);
+}
+
+void Client::mute() {
+  input->pause();
+  muted = true;
+  print_interaction_menu();
+}
+
+void Client::unmute() {
+  input->start();
+  muted = false;
+  print_interaction_menu();
+}
+
+void Client::deafen() {
+  output->pause();
+  deafened = true;
+  print_interaction_menu();
+}
+
+void Client::undeafen() {
+  output->start();
+  deafened = false;
+  print_interaction_menu();
+}
 
 int main(int argc, char **argv) {
   spdlog::set_level(spdlog::level::debug);
@@ -373,10 +464,12 @@ int main(int argc, char **argv) {
   client.input->start();
   client.output->start();
 
-  print_interaction_menu();
+  client.print_interaction_menu();
 
   while (client.process())
     continue;
+
+  std::cout << "\nShutting down...\n";
 
   client.input->stop();
   client.output->stop();

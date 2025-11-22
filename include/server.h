@@ -70,6 +70,10 @@ struct MainServer {
   void handle_connect_packet(Client *client, std::vector<char> &raw_packet);
   void handle_get_connected_clients_packet(Client *client,
                                            std::vector<char> &raw_packet);
+  void handle_connect_client_packet(Client *client,
+                                    std::vector<char> &raw_packet);
+  void handle_disconnect_client_packet(Client *client,
+                                       std::vector<char> &raw_packet);
 };
 
 struct AudioServer {

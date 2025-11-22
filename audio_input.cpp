@@ -50,6 +50,7 @@ AudioInput::AudioInput(OpusEncoder *_encoder_state, CallbackData *_cb_data,
 }
 
 void AudioInput::start() { ma_device_start(device); }
+void AudioInput::pause() { ma_device_stop(device); }
 void AudioInput::stop() {
   ma_device_stop(device);
   ma_device_uninit(device);

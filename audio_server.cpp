@@ -115,20 +115,20 @@ void AudioServer::handle_data_packet(Client *client,
          raw_packet.data() + sizeof(AudioPacketHeader) +
              sizeof(AudioDataPacketHeader),
          audio_header.data_length);
-  if (audio_header.dest_client > main_server->clients.size()) {
-    spdlog::debug("Client does not exist");
-    return;
-  }
-  Client *dest_client = main_server->clients[audio_header.dest_client];
 
-  spdlog::trace("Received data packet from {}:{}", client->audio_hostname,
-                client->audio_service);
-  spdlog::trace("dest_client: {}, data_length: {}", audio_header.dest_client,
-                audio_header.data_length);
-  sendto(fd, raw_packet.data(), raw_packet.size(), 0,
-         reinterpret_cast<sockaddr *>(&dest_client->audio_addr),
-         dest_client->audio_addr_len);
-  spdlog::trace("Redirected data packet from {}:{} to {}:{}",
-                client->audio_hostname, client->audio_service,
-                dest_client->audio_hostname, dest_client->audio_service);
+  for (int dst_id : main_server->connections[client->id]) {
+    Client *dest_client = main_server->clients[dst_id];
+    if (!dest_client)
+      continue;
+    spdlog::trace("Received data packet from {}:{}", client->audio_hostname,
+                  client->audio_service);
+    spdlog::trace("dest_client: {}, data_length: {}", dst_id,
+                  audio_header.data_length);
+    sendto(fd, raw_packet.data(), raw_packet.size(), 0,
+           reinterpret_cast<sockaddr *>(&dest_client->audio_addr),
+           dest_client->audio_addr_len);
+    spdlog::trace("Redirected data packet from {}:{} to {}:{}",
+                  client->audio_hostname, client->audio_service,
+                  dest_client->audio_hostname, dest_client->audio_service);
+  }
 }

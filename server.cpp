@@ -131,6 +131,10 @@ void MainServer::handle_client(Client *client) {
   if (size <= 0) {
     spdlog::info("{}:{} disconnected", client->hostname, client->service);
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->main_fd, NULL);
+    for (int connected_id : connections[client->id]) {
+      connections[connected_id].erase(client->id);
+    }
+    connections.erase(client->id);
     close(client->main_fd);
     clients[client->id] = NULL;
     client_count--;
@@ -150,6 +154,12 @@ void MainServer::handle_client(Client *client) {
     break;
   case RequestPacketHeader::Type::GetConnections:
     handle_get_connected_clients_packet(client, raw_packet);
+    break;
+  case RequestPacketHeader::Type::ConnectClient:
+    handle_connect_client_packet(client, raw_packet);
+    break;
+  case RequestPacketHeader::Type::DisconnectClient:
+    handle_disconnect_client_packet(client, raw_packet);
     break;
   }
 };
@@ -199,15 +209,17 @@ void MainServer::handle_get_connected_clients_packet(
 
   // overflow if too many connections
   // need to work on this later
-  for (int i = 0; i < connections.size(); i++) {
-    if (clients[i] == NULL)
+  for (auto &conn_entry : connections) {
+    int id = conn_entry.first;
+    auto &connection = conn_entry.second;
+    if (clients[id] == NULL)
       continue;
     GetConnectionsResponsePacketEntry entry{
-        .client_id = i,
-        .length = static_cast<unsigned int>(connections[i].size())};
+        .client_id = id,
+        .length = static_cast<unsigned int>(connection.size())};
     memcpy(buffer + offset, &entry, sizeof(entry));
     offset += sizeof(entry);
-    for (int id : connections[i]) {
+    for (int id : connection) {
       memcpy(buffer + offset, &id, sizeof(id));
       offset += sizeof(id);
     }
@@ -215,6 +227,56 @@ void MainServer::handle_get_connected_clients_packet(
 
   spdlog::debug("Sending get connected clients response of size {}", offset);
   send(client->main_fd, buffer, offset, 0);
+}
+
+void MainServer::handle_connect_client_packet(Client *client,
+                                              std::vector<char> &raw_packet) {
+  spdlog::debug("Received connect client packet");
+  int offset = sizeof(RequestPacketHeader);
+  ConnectClientRequestPacket packet;
+  memcpy(&packet, raw_packet.data() + offset, sizeof(packet));
+
+  char buf[sizeof(ResponsePacketHeader) + sizeof(ConnectClientRequestPacket)];
+  ResponsePacketHeader res_header{
+      .type = ResponsePacketHeader::Type::ConnectClient};
+  memcpy(buf, &res_header, sizeof(res_header));
+
+  ConnectClientResponsePacket res;
+  if (packet.id >= clients.size() || clients[packet.id] == NULL) {
+    res.status = false;
+  } else {
+    connections[client->id].insert(packet.id);
+    connections[packet.id].insert(client->id);
+    res.status = true;
+  }
+  memcpy(buf + sizeof(res_header), &res, sizeof(res));
+  send(client->main_fd, buf, sizeof(buf), 0);
+}
+
+void MainServer::handle_disconnect_client_packet(
+    Client *client, std::vector<char> &raw_packet) {
+  spdlog::debug("Received disconnect client packet");
+  int offset = sizeof(RequestPacketHeader);
+  DisconnectClientRequestPacket packet;
+  memcpy(&packet, raw_packet.data() + offset, sizeof(packet));
+
+  char
+      buf[sizeof(ResponsePacketHeader) + sizeof(DisconnectClientRequestPacket)];
+  ResponsePacketHeader res_header{
+      .type = ResponsePacketHeader::Type::DisconnectClient};
+  memcpy(buf, &res_header, sizeof(res_header));
+
+  DisconnectClientResponsePacket res;
+  if (packet.id >= clients.size() || clients[packet.id] == NULL) {
+    // client does not exist
+    res.status = false;
+  } else {
+    connections[client->id].erase(packet.id);
+    connections[packet.id].erase(client->id);
+    res.status = true;
+  }
+  memcpy(buf + sizeof(res_header), &res, sizeof(res));
+  send(client->main_fd, buf, sizeof(buf), 0);
 }
 
 int main(int argc, char **argv) {

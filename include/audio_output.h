@@ -13,5 +13,6 @@ struct AudioOutput {
               ma_device_id device_id);
 
   void start();
+  void pause();
   void stop();
 };

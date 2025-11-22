@@ -32,9 +32,14 @@ struct Client {
 
   int client_id;
 
+  bool muted = false;
+  bool deafened = false;
+
   AudioInput *input;
   AudioOutput *output;
   CallbackData *cb_data;
+
+  void print_interaction_menu();
 
   void setup_main_connection();
   void init_connect();
@@ -43,13 +48,15 @@ struct Client {
   bool process();
 
   bool process_interaction();
-  void process_main_packet();
-  void process_audio_packet();
+  bool process_main_packet();
+  bool process_audio_packet();
 
   void capture_data_handler(std::vector<unsigned char> &data);
   void get_connections();
   void connect_client(int id);
   void disconnect_client(int id);
-  void start_stream();
-  void stop_stream();
+  void unmute();
+  void mute();
+  void undeafen();
+  void deafen();
 };
