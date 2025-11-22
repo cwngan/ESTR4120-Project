@@ -132,18 +132,24 @@ void MainServer::handle_client(Client *client) {
     spdlog::info("{}:{} disconnected", client->hostname, client->service);
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->main_fd, NULL);
     close(client->main_fd);
+    clients[client->id] = NULL;
+    client_count--;
+
     delete client;
     return;
   }
 
   raw_packet.resize(size);
 
-  PacketHeader header;
+  RequestPacketHeader header;
   memcpy(&header, raw_packet.data(), sizeof(header));
 
   switch (header.type) {
-  case PacketHeader::Type::Connect:
+  case RequestPacketHeader::Type::Connect:
     handle_connect_packet(client, raw_packet);
+    break;
+  case RequestPacketHeader::Type::GetConnections:
+    handle_get_connected_clients_packet(client, raw_packet);
     break;
   }
 };
@@ -152,14 +158,63 @@ void MainServer::handle_connect_packet(Client *client,
                                        std::vector<char> &raw_packet) {
   spdlog::info("Received connect packet from {}:{}", client->hostname,
                client->service);
+  client->id = clients.size();
   clients.push_back(client);
-  ConnectResponsePacket res{.id =
-                                static_cast<unsigned int>(clients.size() - 1)};
+  client_count++;
+  connections[client->id] = {};
+
+  char buffer[MAX_PACKET_SIZE];
+  int offset = 0;
+
+  ResponsePacketHeader header{.type = ResponsePacketHeader::Type::Connect};
+  memcpy(buffer + offset, &header, sizeof(header));
+  offset += sizeof(header);
+
+  ConnectResponsePacket res{.id = client->id};
+  memcpy(buffer + offset, &res, sizeof(res));
+  offset += sizeof(res);
 
   spdlog::info("Assigning client {}:{} to id {}", client->hostname,
                client->service, res.id);
 
-  send(client->main_fd, &res, sizeof(res), 0);
+  send(client->main_fd, &buffer, offset, 0);
+}
+
+void MainServer::handle_get_connected_clients_packet(
+    Client *client, std::vector<char> &raw_packet) {
+  spdlog::info("Received get connected clients packet from {}:{}",
+               client->hostname, client->service);
+
+  char buffer[MAX_PACKET_SIZE];
+  int offset = 0;
+
+  ResponsePacketHeader header{.type =
+                                  ResponsePacketHeader::Type::GetConnections};
+  memcpy(buffer + offset, &header, sizeof(header));
+  offset += sizeof(header);
+
+  GetConnectionsResponsePacketHeader content_header{.clients = client_count};
+  memcpy(buffer + offset, &content_header, sizeof(content_header));
+  offset += sizeof(content_header);
+
+  // overflow if too many connections
+  // need to work on this later
+  for (int i = 0; i < connections.size(); i++) {
+    if (clients[i] == NULL)
+      continue;
+    GetConnectionsResponsePacketEntry entry{
+        .client_id = i,
+        .length = static_cast<unsigned int>(connections[i].size())};
+    memcpy(buffer + offset, &entry, sizeof(entry));
+    offset += sizeof(entry);
+    for (int id : connections[i]) {
+      memcpy(buffer + offset, &id, sizeof(id));
+      offset += sizeof(id);
+    }
+  }
+
+  spdlog::debug("Sending get connected clients response of size {}", offset);
+  send(client->main_fd, buffer, offset, 0);
 }
 
 int main(int argc, char **argv) {

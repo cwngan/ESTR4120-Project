@@ -8,10 +8,10 @@
 #include <vector>
 
 #define SAMPLE_RATE 48000
-#define BITRATE 256000
+#define BITRATE 384000
 #define FRAME_COUNT 480
-#define JITTER_DELAY 2
-#define MAX_DELAY 10
+#define JITTER_DELAY 1
+#define MAX_DELAY 5
 #define ENCODED_SIZE (BITRATE / 8 * FRAME_COUNT) / SAMPLE_RATE
 
 struct CallbackData {

@@ -2,19 +2,33 @@
 #define MAX_DATA_SIZE 1396
 #define EPOLL_MAX_EVENTS 1
 
-struct PacketHeader {
-  enum Type { Connect };
+struct RequestPacketHeader {
+  enum Type { Connect, GetConnections };
+  Type type;
+};
+
+struct ResponsePacketHeader {
+  enum Type { Connect, GetConnections };
   Type type;
 };
 
 struct ConnectResponsePacket {
-  unsigned int id;
+  int id;
+};
+
+struct GetConnectionsResponsePacketHeader {
+  unsigned int clients;
+};
+
+struct GetConnectionsResponsePacketEntry {
+  int client_id;
+  unsigned int length;
 };
 
 struct AudioPacketHeader {
   enum Type { Connect, Data };
   Type type;
-  unsigned int client_id;
+  int client_id;
 };
 
 struct AudioConnectResponsePacket {
@@ -22,7 +36,7 @@ struct AudioConnectResponsePacket {
 };
 
 struct AudioDataPacketHeader {
-  unsigned int dest_client;
+  int dest_client;
   unsigned long data_length;
 };
 

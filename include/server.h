@@ -5,6 +5,8 @@
 #include <netdb.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <unordered_map>
+#include <unordered_set>
 
 #define BACKLOG 10
 
@@ -33,6 +35,7 @@ struct SocketInformation {
 
 struct Client {
   int main_fd;
+  int id;
   bool dgram_connected = false;
 
   sockaddr_storage main_addr;
@@ -53,6 +56,8 @@ struct AudioServer;
 struct MainServer {
   ServerOptions options;
   std::vector<Client *> clients;
+  unsigned int client_count;
+  std::unordered_map<int, std::unordered_set<int>> connections;
   AudioServer *audio_server;
 
   int server_fd;
@@ -63,6 +68,8 @@ struct MainServer {
   void process();
   void handle_client(Client *client);
   void handle_connect_packet(Client *client, std::vector<char> &raw_packet);
+  void handle_get_connected_clients_packet(Client *client,
+                                           std::vector<char> &raw_packet);
 };
 
 struct AudioServer {

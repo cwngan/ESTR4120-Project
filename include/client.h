@@ -30,7 +30,7 @@ struct Client {
   int audio_fd;
   int epoll_fd;
 
-  unsigned int client_id;
+  int client_id;
 
   AudioInput *input;
   AudioOutput *output;
@@ -47,7 +47,7 @@ struct Client {
   void process_audio_packet();
 
   void capture_data_handler(std::vector<unsigned char> &data);
-  void get_clients();
+  void get_connections();
   void connect_client(int id);
   void disconnect_client(int id);
   void start_stream();

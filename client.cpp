@@ -19,6 +19,8 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 void print_interaction_menu() {
@@ -61,14 +63,19 @@ void Client::setup_main_connection() {
   main_fd = create_client_socket(options.hostname, options.port, SOCK_STREAM);
   spdlog::info("Client started");
 
-  PacketHeader header{.type = PacketHeader::Type::Connect};
+  RequestPacketHeader header{.type = RequestPacketHeader::Type::Connect};
   if (send(main_fd, &header, sizeof(header), 0) < 0)
     throw std::runtime_error("Error sending connection init packet");
   spdlog::info("Sent connection init packet");
 
+  ResponsePacketHeader response_header;
   ConnectResponsePacket response;
-  if (recv(main_fd, &response, sizeof(response), 0) < 0)
+  char buffer[MAX_PACKET_SIZE];
+
+  if (recv(main_fd, buffer, MAX_PACKET_SIZE, 0) < 0)
     throw std::runtime_error("Error receiving connection init response packet");
+  memcpy(&response_header, buffer, sizeof(response_header));
+  memcpy(&response, buffer + sizeof(response_header), sizeof(response));
 
   spdlog::info("Assigned id: {}", response.id);
   client_id = response.id;
@@ -141,7 +148,7 @@ bool Client::process_interaction() {
     return false;
 
   if (actions[0] == "1") {
-    get_clients();
+    get_connections();
   } else if (actions[0] == "2" && actions.size() >= 2) {
     connect_client(std::stoi(actions[1]));
   } else if (actions[0] == "3" && actions.size() >= 2) {
@@ -151,12 +158,66 @@ bool Client::process_interaction() {
   } else {
     std::cout << "Invalid action!\n";
   }
-  print_interaction_menu();
 
   return true;
 }
 
-void Client::process_main_packet() { spdlog::debug("Main fd activity"); }
+void Client::process_main_packet() {
+  spdlog::debug("Main fd activity");
+  std::vector<unsigned char> buffer(MAX_PACKET_SIZE);
+  int size = recv(main_fd, buffer.data(), MAX_PACKET_SIZE, 0);
+  if (size < 0) {
+    spdlog::error("Error receiving data from main server. Reason: {}",
+                  strerror(errno));
+    return;
+  }
+  buffer.resize(size);
+  int offset = 0;
+
+  ResponsePacketHeader packet_header;
+  memcpy(&packet_header, buffer.data() + offset, sizeof(packet_header));
+  offset += sizeof(packet_header);
+
+  if (packet_header.type == ResponsePacketHeader::Type::GetConnections) {
+    GetConnectionsResponsePacketHeader content_header;
+    memcpy(&content_header, buffer.data() + offset, sizeof(content_header));
+    offset += sizeof(content_header);
+    std::unordered_map<int, std::unordered_set<unsigned int>> connections;
+
+    spdlog::debug("header.clients: {}", content_header.clients);
+    for (int i = 0; i < content_header.clients; i++) {
+      GetConnectionsResponsePacketEntry entry;
+      memcpy(&entry, buffer.data() + offset, sizeof(entry));
+      offset += sizeof(entry);
+      spdlog::debug("entry.length: {}, entry.client_id: {}", entry.length,
+                    entry.client_id);
+      connections[entry.client_id] = {};
+      for (int j = 0; j < entry.length; j++) {
+        int id;
+        memcpy(&id, buffer.data() + offset, sizeof(id));
+        offset += sizeof(id);
+        connections[entry.client_id].insert(id);
+      }
+    }
+
+    std::cout << "Current connections\n";
+    std::cout << "----------------------------\n";
+    for (auto &connection : connections) {
+      int id = connection.first;
+      auto &clients = connection.second;
+      std::cout << id << "\t- ";
+      if (clients.size() == 0)
+        std::cout << "No connected clients\n";
+
+      for (int cid : clients)
+        std::cout << cid << ", ";
+
+      std::cout << "\n";
+    }
+  }
+
+  print_interaction_menu();
+}
 
 void Client::process_audio_packet() {
   spdlog::trace("Audio fd activity");
@@ -217,7 +278,10 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
   send(audio_fd, packet, packet_size, 0);
 }
 
-void Client::get_clients() {}
+void Client::get_connections() {
+  RequestPacketHeader header{.type = RequestPacketHeader::Type::GetConnections};
+  send(main_fd, &header, sizeof(header), 0);
+}
 
 void Client::connect_client(int id) {}
 
