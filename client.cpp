@@ -534,6 +534,7 @@ int main(int argc, char **argv) {
       [&client](std::vector<unsigned char> &data) {
         client.capture_data_handler(data);
       };
+  client.cb_data->decoded_data = std::vector<float>(FRAME_COUNT * CHANNELS);
 
   AudioInput *input = new AudioInput(encoder_state, client.cb_data,
                                      pCaptureInfos[capture_device].id);

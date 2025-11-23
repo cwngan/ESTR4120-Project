@@ -21,7 +21,7 @@ struct CallbackData {
   std::unordered_map<unsigned int, OpusDecoder *> decoder_states;
   int ring_buffer_count = 0;
   std::unordered_map<unsigned int, ma_rb *> ring_buffers;
-  // ma_rb *ring_buffer;
+  std::vector<float> decoded_data;
 
   std::function<void(std::vector<unsigned char> &data)> capture_data_handler;
 };

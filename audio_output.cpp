@@ -12,8 +12,6 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
   if (cb_data->ring_buffer_count == 0)
     return;
 
-  float decoded_data[FRAME_COUNT * CHANNELS];
-
   int ring_buffer_count = cb_data->ring_buffer_count;
   spdlog::trace("{} ring buffer to read from", ring_buffer_count);
   for (auto entry : cb_data->ring_buffers) {
@@ -42,13 +40,14 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
     unsigned char *buffer =
         static_cast<unsigned char *>(read_ptr) + sizeof(*size);
 
-    auto decoded_bytes = opus_decode_float(cb_data->decoder_states[id], buffer,
-                                           *size, decoded_data, frameCount, 0);
+    auto decoded_bytes =
+        opus_decode_float(cb_data->decoder_states[id], buffer, *size,
+                          cb_data->decoded_data.data(), frameCount, 0);
     spdlog::trace("decoding with parameters: frameCount={}, size={}",
                   frameCount, *size);
 
     for (int i = 0; i < frameCount * pDevice->playback.channels; i++)
-      static_cast<float *>(pOutput)[i] += decoded_data[i];
+      static_cast<float *>(pOutput)[i] += cb_data->decoded_data[i];
 
     ma_rb_commit_read(ring_buffer, bytes_to_read);
     spdlog::trace("read {} bytes at {}, decoded to {} bytes", *size, read_ptr,
