@@ -21,7 +21,9 @@ ServerOptions::ServerOptions() : opts("server") {
   opts.add_options()
     ("p,port", "Port of the main server", cxxopts::value<std::string>())
     ("a,audio-port", "Port of the audio server", cxxopts::value<std::string>())
-    ("help", "Print help", cxxopts::value<bool>()->default_value("false"));
+    ("help", "Print help", cxxopts::value<bool>()->default_value("false"))
+    ("debug", "Output debug logs", cxxopts::value<bool>()->default_value("false"))
+    ("trace", "Output trace logs (EXTREMELY LARGE FILES)", cxxopts::value<bool>()->default_value("false"));
   // clang-format on
 }
 
@@ -40,6 +42,9 @@ void ServerOptions::parse_options(int argc, char **argv) {
 
   port = result["port"].as<std::string>();
   audio_port = result["audio-port"].as<std::string>();
+
+  debug = result["debug"].as<bool>();
+  trace = result["trace"].as<bool>();
 }
 
 void MainServer::setup() {
@@ -358,13 +363,17 @@ void MainServer::handle_deafen(Client *client, std::vector<char> &raw_packet) {
 }
 
 int main(int argc, char **argv) {
-  spdlog::set_level(spdlog::level::debug);
-
   ServerOptions options;
   options.parse_options(argc, argv);
   if (options.help) {
     std::cout << options.opts.help() << std::endl;
+    return 0;
   }
+
+  if (options.trace)
+    spdlog::set_level(spdlog::level::trace);
+  else if (options.debug)
+    spdlog::set_level(spdlog::level::debug);
 
   MainServer server{.options = options};
   server.setup();

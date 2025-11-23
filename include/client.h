@@ -11,6 +11,8 @@ struct ClientOptions {
   // Port of the audio server
   std::string audio_port;
   bool help;
+  bool debug;
+  bool trace;
 
   cxxopts::Options opts;
 

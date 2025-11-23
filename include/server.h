@@ -17,6 +17,8 @@ struct ServerOptions {
   std::string port;
   std::string audio_port;
   bool help;
+  bool debug;
+  bool trace;
 
   cxxopts::Options opts;
 

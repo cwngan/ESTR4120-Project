@@ -43,7 +43,9 @@ ClientOptions::ClientOptions() : opts("client") {
     ("h,hostname", "Hostname of the server", cxxopts::value<std::string>())
     ("p,port", "Port of the server", cxxopts::value<std::string>())
     ("a,audio-port", "Port of the audio server", cxxopts::value<std::string>())
-    ("help", "Print help", cxxopts::value<bool>()->default_value("false"));
+    ("help", "Print help", cxxopts::value<bool>()->default_value("false"))
+    ("debug", "Output debug logs", cxxopts::value<bool>()->default_value("false"))
+    ("trace", "Output trace logs (EXTREMELY LARGE FILES)", cxxopts::value<bool>()->default_value("false"));
   // clang-format on
 }
 
@@ -60,6 +62,9 @@ void ClientOptions::parse_options(int argc, char **argv) {
   hostname = result["hostname"].as<std::string>();
   port = result["port"].as<std::string>();
   audio_port = result["audio-port"].as<std::string>();
+
+  debug = result["debug"].as<bool>();
+  trace = result["trace"].as<bool>();
 }
 
 void Client::setup_main_connection() {
@@ -168,6 +173,7 @@ bool Client::process_interaction() {
       deafen();
   } else {
     std::cout << "Invalid action!\n";
+    print_interaction_menu();
   }
 
   return true;
@@ -254,9 +260,9 @@ bool Client::process_main_packet() {
         opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(BITRATE));
         cb_data->decoder_states[res.id] = decoder_state;
       }
-      std::cout << "Successfully connected to client " << res.id << std::endl;
+      std::cout << "\nSuccessfully connected to client " << res.id << std::endl;
     } else {
-      std::cout << "Failed to connect to client" << std::endl;
+      std::cout << "\nFailed to connect to client\n";
     }
     break;
   }
@@ -272,10 +278,10 @@ bool Client::process_main_packet() {
         opus_decoder_destroy(cb_data->decoder_states[res.id]);
         cb_data->decoder_states.erase(res.id);
       }
-      std::cout << "Successfully disconnected from client " << res.id
+      std::cout << "\nSuccessfully disconnected from client " << res.id
                 << std::endl;
     } else {
-      std::cout << "Failed to disconnect from client" << std::endl;
+      std::cout << "\nFailed to disconnect from client\n";
     }
     break;
   }
@@ -283,9 +289,9 @@ bool Client::process_main_packet() {
     MuteResponsePacket res;
     memcpy(&res, buffer.data() + offset, sizeof(res));
     if (res.status) {
-      std::cout << "Successfully muted" << std::endl;
+      std::cout << "\nSuccessfully muted\n";
     } else {
-      std::cout << "Failed to mute" << std::endl;
+      std::cout << "\nFailed to mute\n";
     }
     break;
   }
@@ -293,9 +299,9 @@ bool Client::process_main_packet() {
     DeafenResponsePacket res;
     memcpy(&res, buffer.data() + offset, sizeof(res));
     if (res.status) {
-      std::cout << "Successfully deafened" << std::endl;
+      std::cout << "\nSuccessfully deafened\n";
     } else {
-      std::cout << "Failed to deafen" << std::endl;
+      std::cout << "\nFailed to deafen\n";
     }
     break;
   }
@@ -463,14 +469,18 @@ void Client::undeafen() {
 }
 
 int main(int argc, char **argv) {
-  spdlog::set_level(spdlog::level::debug);
   auto daily_logger =
       spdlog::daily_logger_mt("daily_logger", "logs/client.log");
   spdlog::set_default_logger(daily_logger);
-  spdlog::flush_on(spdlog::level::debug);
+  spdlog::flush_on(spdlog::level::trace);
 
   ClientOptions options;
   options.parse_options(argc, argv);
+
+  if (options.trace)
+    spdlog::set_level(spdlog::level::trace);
+  else if (options.debug)
+    spdlog::set_level(spdlog::level::debug);
 
   Client client;
   client.options = options;
