@@ -59,6 +59,8 @@ struct Client {
 struct AudioServer;
 
 struct MainServer {
+  static void send_disconnect_packet(Client *target, int client_id);
+
   ServerOptions options;
   std::vector<Client *> clients;
   unsigned int client_count;

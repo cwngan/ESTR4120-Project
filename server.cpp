@@ -122,6 +122,18 @@ void MainServer::process() {
   }
 }
 
+void MainServer::send_disconnect_packet(Client *target, int client_id) {
+  char
+      buf[sizeof(ResponsePacketHeader) + sizeof(DisconnectClientRequestPacket)];
+  ResponsePacketHeader res_header{
+      .type = ResponsePacketHeader::Type::DisconnectClient};
+  memcpy(buf, &res_header, sizeof(res_header));
+
+  DisconnectClientResponsePacket res{.id = client_id};
+  memcpy(buf + sizeof(res_header), &res, sizeof(res));
+  send(target->main_fd, buf, sizeof(buf), 0);
+}
+
 void MainServer::handle_client(Client *client) {
   std::vector<char> raw_packet(MAX_PACKET_SIZE);
   ssize_t size = recv(client->main_fd, raw_packet.data(), MAX_PACKET_SIZE, 0);
@@ -136,6 +148,7 @@ void MainServer::handle_client(Client *client) {
       for (int connected_id : connections[client->id]) {
         if (connected_id == client->id)
           continue;
+        send_disconnect_packet(client, connected_id);
         connections[connected_id].erase(client->id);
       }
       connections.erase(client->id);
@@ -294,9 +307,7 @@ void MainServer::handle_disconnect_client_packet(
     connections[packet.id].erase(client->id);
 
     // sent update to target
-    res.id = client->id;
-    memcpy(buf + sizeof(res_header), &res, sizeof(res));
-    send(clients[packet.id]->main_fd, buf, sizeof(buf), 0);
+    send_disconnect_packet(clients[packet.id], client->id);
 
     res.id = packet.id;
   }
