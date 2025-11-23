@@ -330,7 +330,7 @@ void MainServer::handle_deafen(Client *client, std::vector<char> &raw_packet) {
 }
 
 int main(int argc, char **argv) {
-  spdlog::set_level(spdlog::level::debug);
+  spdlog::set_level(spdlog::level::info);
 
   ServerOptions options;
   options.parse_options(argc, argv);

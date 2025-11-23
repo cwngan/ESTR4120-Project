@@ -437,7 +437,7 @@ void Client::undeafen() {
 }
 
 int main(int argc, char **argv) {
-  spdlog::set_level(spdlog::level::debug);
+  spdlog::set_level(spdlog::level::info);
   auto daily_logger =
       spdlog::daily_logger_mt("daily_logger", "logs/client.log");
   spdlog::set_default_logger(daily_logger);
