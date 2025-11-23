@@ -38,8 +38,9 @@ void AudioServer::handle_event() {
   memcpy(&header, raw_packet.data(), sizeof(header));
 
   // check if client id exists
-  if (header.client_id >= main_server->clients.size()) {
-    spdlog::error("Client id does not exist");
+  if (header.client_id >= main_server->clients.size() &&
+      main_server->clients[header.client_id] != NULL) {
+    spdlog::error("Client does not exist");
     return;
   }
 
