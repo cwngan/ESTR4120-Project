@@ -85,6 +85,7 @@ void MainServer::process() {
         set_nonblocking(client_fd);
 
         Client *client = new Client{.main_fd = client_fd,
+                                    .id = -1,
                                     .main_addr = client_addr,
                                     .main_addr_len = client_len};
         epoll_event event;
@@ -131,13 +132,15 @@ void MainServer::handle_client(Client *client) {
   if (size <= 0) {
     spdlog::info("{}:{} disconnected", client->hostname, client->service);
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->main_fd, NULL);
-    for (int connected_id : connections[client->id]) {
-      connections[connected_id].erase(client->id);
+    if (client->id != -1 && connections.find(client->id) != connections.end()) {
+      for (int connected_id : connections[client->id]) {
+        connections[connected_id].erase(client->id);
+      }
+      connections.erase(client->id);
+      clients[client->id] = NULL;
+      client_count--;
     }
-    connections.erase(client->id);
     close(client->main_fd);
-    clients[client->id] = NULL;
-    client_count--;
 
     delete client;
     return;
