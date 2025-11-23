@@ -9,48 +9,57 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
                                        const void *pInput,
                                        ma_uint32 frameCount) {
   CallbackData *cb_data = static_cast<CallbackData *>(pDevice->pUserData);
-  if (cb_data->ring_buffer == NULL) {
-    cb_data->ring_buffer = create_ring_buffer((ENCODED_SIZE + sizeof(short)) *
-                                              (SAMPLE_RATE / frameCount));
-  }
-  ma_rb *ringBuffer = cb_data->ring_buffer;
-
-  ma_uint32 available_read = ma_rb_available_read(ringBuffer);
-  if (available_read < JITTER_DELAY * (ENCODED_SIZE + sizeof(short)))
+  if (cb_data->ring_buffer_count == 0)
     return;
 
-  if (available_read > MAX_DELAY * (ENCODED_SIZE + sizeof(short))) {
-    ma_uint32 skip = available_read - (MAX_DELAY - JITTER_DELAY) *
-                                          (ENCODED_SIZE + sizeof(short));
-    spdlog::warn("{} bytes behind, skipping {} bytes", available_read, skip);
-    ma_rb_seek_read(ringBuffer, skip);
+  float decoded_data[FRAME_COUNT * CHANNELS];
+
+  int ring_buffer_count = cb_data->ring_buffer_count;
+  spdlog::trace("{} ring buffer to read from", ring_buffer_count);
+  for (auto entry : cb_data->ring_buffers) {
+    auto id = entry.first;
+    auto ring_buffer = entry.second;
+    ma_uint32 available_read = ma_rb_available_read(ring_buffer);
+    if (available_read < JITTER_DELAY * (ENCODED_SIZE + sizeof(short)))
+      continue;
+
+    if (available_read > MAX_DELAY * (ENCODED_SIZE + sizeof(short))) {
+      ma_uint32 skip = available_read - (MAX_DELAY - JITTER_DELAY) *
+                                            (ENCODED_SIZE + sizeof(short));
+      spdlog::warn("{} bytes behind, skipping {} bytes", available_read, skip);
+      ma_rb_seek_read(ring_buffer, skip);
+    }
+
+    void *read_ptr;
+    size_t target_bytes_to_read = sizeof(short) + ENCODED_SIZE;
+    size_t bytes_to_read = target_bytes_to_read;
+    if (ma_rb_acquire_read(ring_buffer, &bytes_to_read, &read_ptr) !=
+            MA_SUCCESS ||
+        bytes_to_read != target_bytes_to_read)
+      continue;
+
+    unsigned short *size = static_cast<unsigned short *>(read_ptr);
+    unsigned char *buffer =
+        static_cast<unsigned char *>(read_ptr) + sizeof(*size);
+
+    auto decoded_bytes = opus_decode_float(cb_data->decoder_states[id], buffer,
+                                           *size, decoded_data, frameCount, 0);
+    spdlog::trace("decoding with parameters: frameCount={}, size={}",
+                  frameCount, *size);
+
+    for (int i = 0; i < frameCount * pDevice->playback.channels; i++)
+      static_cast<float *>(pOutput)[i] += decoded_data[i];
+
+    ma_rb_commit_read(ring_buffer, bytes_to_read);
+    spdlog::trace("read {} bytes at {}, decoded to {} bytes", *size, read_ptr,
+                  decoded_bytes);
   }
-
-  void *read_ptr;
-  size_t target_bytes_to_read = sizeof(short) + ENCODED_SIZE;
-  size_t bytes_to_read = target_bytes_to_read;
-  if (ma_rb_acquire_read(ringBuffer, &bytes_to_read, &read_ptr) != MA_SUCCESS ||
-      bytes_to_read != target_bytes_to_read)
-    return;
-
-  unsigned short *size = static_cast<unsigned short *>(read_ptr);
-  unsigned char *buffer =
-      static_cast<unsigned char *>(read_ptr) + sizeof(*size);
-
-  auto decoded_bytes =
-      opus_decode_float(cb_data->decoder_state, buffer, *size,
-                        static_cast<float *>(pOutput), frameCount, 0);
-  ma_rb_commit_read(ringBuffer, bytes_to_read);
-
-  spdlog::trace("read {} bytes at {}", *size, read_ptr);
 
   (void)pInput;
 }
 
-AudioOutput::AudioOutput(OpusDecoder *_decoder_state, CallbackData *_cb_data,
-                         ma_device_id device_id) {
+AudioOutput::AudioOutput(CallbackData *_cb_data, ma_device_id device_id) {
   cb_data = _cb_data;
-  decoder_state = _decoder_state;
 
   ma_device_config device_config =
       ma_device_config_init(ma_device_type_playback);
@@ -58,7 +67,7 @@ AudioOutput::AudioOutput(OpusDecoder *_decoder_state, CallbackData *_cb_data,
 
   device_config.playback.pDeviceID = &device_id;
   device_config.playback.format = ma_format_f32;
-  device_config.playback.channels = 2;
+  device_config.playback.channels = CHANNELS;
   device_config.sampleRate = SAMPLE_RATE;
   device_config.dataCallback = output_data_callback;
   device_config.periodSizeInFrames = FRAME_COUNT;

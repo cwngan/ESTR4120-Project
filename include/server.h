@@ -2,7 +2,9 @@
 
 #include "common.h"
 #include "cxxopts.hpp"
+#include <cstddef>
 #include <netdb.h>
+#include <queue>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unordered_map>

@@ -134,6 +134,8 @@ void MainServer::handle_client(Client *client) {
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->main_fd, NULL);
     if (client->id != -1 && connections.find(client->id) != connections.end()) {
       for (int connected_id : connections[client->id]) {
+        if (connected_id == client->id)
+          continue;
         connections[connected_id].erase(client->id);
       }
       connections.erase(client->id);
@@ -226,8 +228,8 @@ void MainServer::handle_get_connected_clients_packet(
     GetConnectionsResponsePacketEntry entry{
         .client_id = id,
         .length = static_cast<unsigned int>(connection.size()),
-        .muted = client->muted,
-        .deafened = client->deafened};
+        .muted = clients[id]->muted,
+        .deafened = clients[id]->deafened};
     memcpy(buffer + offset, &entry, sizeof(entry));
     offset += sizeof(entry);
     for (int id : connection) {
@@ -254,11 +256,17 @@ void MainServer::handle_connect_client_packet(Client *client,
 
   ConnectClientResponsePacket res;
   if (packet.id >= clients.size() || clients[packet.id] == NULL) {
-    res.status = false;
+    res.id = -1;
   } else {
     connections[client->id].insert(packet.id);
     connections[packet.id].insert(client->id);
-    res.status = true;
+
+    // send update to target
+    res.id = client->id;
+    memcpy(buf + sizeof(res_header), &res, sizeof(res));
+    send(clients[packet.id]->main_fd, buf, sizeof(buf), 0);
+
+    res.id = packet.id;
   }
   memcpy(buf + sizeof(res_header), &res, sizeof(res));
   send(client->main_fd, buf, sizeof(buf), 0);
@@ -280,11 +288,17 @@ void MainServer::handle_disconnect_client_packet(
   DisconnectClientResponsePacket res;
   if (packet.id >= clients.size() || clients[packet.id] == NULL) {
     // client does not exist
-    res.status = false;
+    res.id = -1;
   } else {
     connections[client->id].erase(packet.id);
     connections[packet.id].erase(client->id);
-    res.status = true;
+
+    // sent update to target
+    res.id = client->id;
+    memcpy(buf + sizeof(res_header), &res, sizeof(res));
+    send(clients[packet.id]->main_fd, buf, sizeof(buf), 0);
+
+    res.id = packet.id;
   }
   memcpy(buf + sizeof(res_header), &res, sizeof(res));
   send(client->main_fd, buf, sizeof(buf), 0);
@@ -333,7 +347,7 @@ void MainServer::handle_deafen(Client *client, std::vector<char> &raw_packet) {
 }
 
 int main(int argc, char **argv) {
-  spdlog::set_level(spdlog::level::info);
+  spdlog::set_level(spdlog::level::debug);
 
   ServerOptions options;
   options.parse_options(argc, argv);

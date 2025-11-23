@@ -192,6 +192,8 @@ bool Client::process_main_packet() {
   memcpy(&packet_header, buffer.data() + offset, sizeof(packet_header));
   offset += sizeof(packet_header);
 
+  spdlog::debug("Received packet type {}",
+                static_cast<int>(packet_header.type));
   switch (packet_header.type) {
   case ResponsePacketHeader::Type::Connect: {
     // ignore connect response packets
@@ -240,8 +242,19 @@ bool Client::process_main_packet() {
   case ResponsePacketHeader::Type::ConnectClient: {
     ConnectClientResponsePacket res;
     memcpy(&res, buffer.data() + offset, sizeof(res));
-    if (res.status) {
-      std::cout << "Successfully connected to client" << std::endl;
+    if (res.id >= 0) {
+      spdlog::debug("Received connection packet, id: {}", res.id);
+      if (cb_data->ring_buffers.find(res.id) == cb_data->ring_buffers.end()) {
+        cb_data->ring_buffers[res.id] = create_ring_buffer(
+            (ENCODED_SIZE + sizeof(short)) * (SAMPLE_RATE / FRAME_COUNT));
+        cb_data->ring_buffer_count++;
+        int error;
+        OpusDecoder *decoder_state =
+            opus_decoder_create(SAMPLE_RATE, CHANNELS, &error);
+        opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(BITRATE));
+        cb_data->decoder_states[res.id] = decoder_state;
+      }
+      std::cout << "Successfully connected to client " << res.id << std::endl;
     } else {
       std::cout << "Failed to connect to client" << std::endl;
     }
@@ -250,8 +263,17 @@ bool Client::process_main_packet() {
   case ResponsePacketHeader::Type::DisconnectClient: {
     DisconnectClientResponsePacket res;
     memcpy(&res, buffer.data() + offset, sizeof(res));
-    if (res.status) {
-      std::cout << "Successfully disconnected from client" << std::endl;
+    if (res.id >= 0) {
+      spdlog::debug("Received disconnection packet, id: {}", res.id);
+      if (cb_data->ring_buffers.find(res.id) != cb_data->ring_buffers.end()) {
+        ma_rb_uninit(cb_data->ring_buffers[res.id]);
+        cb_data->ring_buffers.erase(res.id);
+        cb_data->ring_buffer_count--;
+        opus_decoder_destroy(cb_data->decoder_states[res.id]);
+        cb_data->decoder_states.erase(res.id);
+      }
+      std::cout << "Successfully disconnected from client " << res.id
+                << std::endl;
     } else {
       std::cout << "Failed to disconnect from client" << std::endl;
     }
@@ -302,8 +324,9 @@ bool Client::process_audio_packet() {
     spdlog::error("Unsupported packet type from audio server");
     return true;
   }
-  if (!cb_data->ring_buffer) {
-    spdlog::debug("Ring buffer not init yet");
+
+  if (cb_data->ring_buffers.find(header.client_id) ==
+      cb_data->ring_buffers.end()) {
     return true;
   }
   AudioDataPacketHeader data_header;
@@ -315,9 +338,10 @@ bool Client::process_audio_packet() {
   void *write_ptr;
   size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
   size_t bytes_to_write = target_bytes_to_write;
-  if (ma_rb_acquire_write(cb_data->ring_buffer, &bytes_to_write, &write_ptr) !=
-          MA_SUCCESS ||
+  if (ma_rb_acquire_write(cb_data->ring_buffers[header.client_id],
+                          &bytes_to_write, &write_ptr) != MA_SUCCESS ||
       bytes_to_write != target_bytes_to_write) {
+    spdlog::trace("Buffer full");
     return true;
   }
 
@@ -326,14 +350,16 @@ bool Client::process_audio_packet() {
       static_cast<unsigned char *>(write_ptr) + sizeof(*data_length);
   *data_length = data_header.data_length;
   memcpy(write_buffer_ptr, data.data(), data_header.data_length);
-  ma_rb_commit_write(cb_data->ring_buffer, bytes_to_write);
-  spdlog::trace("write {} bytes of audio data in ring buffer", *data_length);
+  ma_rb_commit_write(cb_data->ring_buffers[header.client_id], bytes_to_write);
+
+  spdlog::trace("write {} bytes of audio data in ring buffer for client {}",
+                *data_length, header.client_id);
 
   return true;
 }
 
 void Client::capture_data_handler(std::vector<unsigned char> &data) {
-  spdlog::trace("captured audio data of {} bytes", data.size());
+  // spdlog::trace("captured audio data of {} bytes", data.size());
   AudioPacketHeader header{.type = AudioPacketHeader::Type::Data,
                            .client_id = client_id};
   AudioDataPacketHeader data_header{.data_length = data.size()};
@@ -437,11 +463,11 @@ void Client::undeafen() {
 }
 
 int main(int argc, char **argv) {
-  spdlog::set_level(spdlog::level::info);
+  spdlog::set_level(spdlog::level::debug);
   auto daily_logger =
       spdlog::daily_logger_mt("daily_logger", "logs/client.log");
   spdlog::set_default_logger(daily_logger);
-  spdlog::flush_on(spdlog::level::info);
+  spdlog::flush_on(spdlog::level::debug);
 
   ClientOptions options;
   options.parse_options(argc, argv);
@@ -496,16 +522,14 @@ int main(int argc, char **argv) {
   epoll_ctl(client.epoll_fd, EPOLL_CTL_ADD, client.main_fd, &event);
 
   int error;
-  OpusEncoder *encoder_state =
-      opus_encoder_create(SAMPLE_RATE, 2, OPUS_APPLICATION_AUDIO, &error);
-  OpusDecoder *decoder_state = opus_decoder_create(SAMPLE_RATE, 2, &error);
+  OpusEncoder *encoder_state = opus_encoder_create(
+      SAMPLE_RATE, CHANNELS, OPUS_APPLICATION_AUDIO, &error);
   opus_encoder_ctl(encoder_state, OPUS_SET_BITRATE(BITRATE));
-  opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(BITRATE));
 
   client.cb_data = new CallbackData;
   client.cb_data->encoder_state = encoder_state;
-  client.cb_data->decoder_state = decoder_state;
-  client.cb_data->ring_buffer = NULL;
+  client.cb_data->decoder_states = {};
+  client.cb_data->ring_buffers = {};
   client.cb_data->capture_data_handler =
       [&client](std::vector<unsigned char> &data) {
         client.capture_data_handler(data);
@@ -513,8 +537,8 @@ int main(int argc, char **argv) {
 
   AudioInput *input = new AudioInput(encoder_state, client.cb_data,
                                      pCaptureInfos[capture_device].id);
-  AudioOutput *output = new AudioOutput(decoder_state, client.cb_data,
-                                        pPlaybackInfos[playback_device].id);
+  AudioOutput *output =
+      new AudioOutput(client.cb_data, pPlaybackInfos[playback_device].id);
 
   client.input = input;
   client.output = output;
@@ -531,9 +555,13 @@ int main(int argc, char **argv) {
 
   client.input->stop();
   client.output->stop();
-  ma_rb_uninit(client.cb_data->ring_buffer);
+  for (auto &entry : client.cb_data->ring_buffers) {
+    ma_rb_uninit(entry.second);
+  }
   opus_encoder_destroy(client.cb_data->encoder_state);
-  opus_decoder_destroy(client.cb_data->decoder_state);
+  for (auto entry : client.cb_data->decoder_states) {
+    opus_decoder_destroy(entry.second);
+  }
   delete client.cb_data;
 
   spdlog::info("Client shutdown");

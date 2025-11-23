@@ -46,7 +46,7 @@ struct ConnectClientRequestPacket {
 };
 
 struct ConnectClientResponsePacket {
-  bool status;
+  int id;
 };
 
 struct DisconnectClientRequestPacket {
@@ -54,7 +54,7 @@ struct DisconnectClientRequestPacket {
 };
 
 struct DisconnectClientResponsePacket {
-  bool status;
+  int id;
 };
 
 struct MuteRequestPacket {

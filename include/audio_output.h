@@ -6,11 +6,9 @@ struct AudioOutput {
                                    const void *pInput, ma_uint32 frameCount);
 
   ma_device *device;
-  OpusDecoder *decoder_state;
   CallbackData *cb_data;
 
-  AudioOutput(OpusDecoder *_decoder_state, CallbackData *_cb_data,
-              ma_device_id device_id);
+  AudioOutput(CallbackData *_cb_data, ma_device_id device_id);
 
   void start();
   void pause();

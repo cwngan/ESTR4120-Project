@@ -15,13 +15,13 @@ void AudioInput::input_data_callback(ma_device *pDevice, void *pOutput,
   auto encoded_bytes = opus_encode_float(
       cb_data->encoder_state, static_cast<const float *>(pInput), frameCount,
       buffer.data(), ENCODED_SIZE);
-  if (encoded_bytes == -1) {
+  if (encoded_bytes < 0) {
     printf("Error encoding audio\n");
     return;
   }
   buffer.resize(encoded_bytes);
 
-  spdlog::trace("frame count: {}", frameCount);
+  // spdlog::trace("frame count: {}", frameCount);
 
   cb_data->capture_data_handler(buffer);
 
@@ -39,7 +39,7 @@ AudioInput::AudioInput(OpusEncoder *_encoder_state, CallbackData *_cb_data,
 
   device_config.capture.pDeviceID = &device_id;
   device_config.capture.format = ma_format_f32;
-  device_config.capture.channels = 2;
+  device_config.capture.channels = CHANNELS;
   device_config.sampleRate = SAMPLE_RATE;
   device_config.periodSizeInFrames = FRAME_COUNT;
   device_config.dataCallback = input_data_callback;
