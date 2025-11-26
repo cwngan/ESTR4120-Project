@@ -396,7 +396,7 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
   // spdlog::trace("captured audio data of {} bytes", data.size());
   AudioPacketHeader header{.type = AudioPacketHeader::Type::Data,
                            .client_id = client_id};
-  AudioDataPacketHeader data_header{.seq_number = seq_number++,
+  AudioDataPacketHeader data_header{.seq_number = seq_number,
                                     .data_length = data.size()};
   int packet_size = sizeof(header) + sizeof(data_header) + data.size();
   unsigned char *packet = new unsigned char[packet_size];
@@ -405,6 +405,11 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
   memcpy(packet + sizeof(header) + sizeof(data_header), data.data(),
          data.size());
   send(audio_fd, packet, packet_size, 0);
+
+  if (seq_number == INT32_MAX)
+    seq_number = 0;
+  else
+    seq_number++;
 }
 
 void Client::get_connections() {
