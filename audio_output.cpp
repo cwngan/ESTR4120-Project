@@ -37,12 +37,17 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
       continue;
 
     unsigned short *size = static_cast<unsigned short *>(read_ptr);
-    unsigned char *buffer =
-        static_cast<unsigned char *>(read_ptr) + sizeof(*size);
+    unsigned char *buffer;
 
+    if (*size == 0) {
+      // frame lost or skipped
+      buffer = NULL;
+    } else {
+      buffer = static_cast<unsigned char *>(read_ptr) + sizeof(*size);
+    }
     auto decoded_bytes =
-        opus_decode_float(cb_data->decoder_states[id], buffer, *size,
-                          cb_data->decoded_data.data(), frameCount, 0);
+        opus_decode_float(cb_data->decoder_states[id].decoder_state, buffer,
+                          *size, cb_data->decoded_data.data(), frameCount, 0);
     spdlog::trace("decoding with parameters: frameCount={}, size={}",
                   frameCount, *size);
 

@@ -9,16 +9,21 @@
 #include <vector>
 
 #define SAMPLE_RATE 48000
-#define BITRATE 64000
+#define BITRATE 128000
 #define FRAME_COUNT 960
 #define JITTER_DELAY 1
 #define MAX_DELAY 5
 #define CHANNELS 2
 #define ENCODED_SIZE (BITRATE / 8 * FRAME_COUNT) / SAMPLE_RATE
 
+struct ClientStreamDecoder {
+  int seq_number;
+  OpusDecoder *decoder_state;
+};
+
 struct CallbackData {
   OpusEncoder *encoder_state;
-  std::unordered_map<unsigned int, OpusDecoder *> decoder_states;
+  std::unordered_map<unsigned int, ClientStreamDecoder> decoder_states;
   int ring_buffer_count = 0;
   std::unordered_map<unsigned int, ma_rb *> ring_buffers;
   std::vector<float> decoded_data;

@@ -258,7 +258,8 @@ bool Client::process_main_packet() {
         OpusDecoder *decoder_state =
             opus_decoder_create(SAMPLE_RATE, CHANNELS, &error);
         opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(BITRATE));
-        cb_data->decoder_states[res.id] = decoder_state;
+        cb_data->decoder_states[res.id] = {.seq_number = -1,
+                                           .decoder_state = decoder_state};
       }
       std::cout << "\nSuccessfully connected to client " << res.id << std::endl;
     } else {
@@ -275,7 +276,7 @@ bool Client::process_main_packet() {
         ma_rb_uninit(cb_data->ring_buffers[res.id]);
         cb_data->ring_buffers.erase(res.id);
         cb_data->ring_buffer_count--;
-        opus_decoder_destroy(cb_data->decoder_states[res.id]);
+        opus_decoder_destroy(cb_data->decoder_states[res.id].decoder_state);
         cb_data->decoder_states.erase(res.id);
       }
       std::cout << "\nSuccessfully disconnected from client " << res.id
@@ -335,11 +336,31 @@ bool Client::process_audio_packet() {
       cb_data->ring_buffers.end()) {
     return true;
   }
+
   AudioDataPacketHeader data_header;
   memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
   std::vector<unsigned char> data(data_header.data_length);
   memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
          data.size());
+
+  int *current_seq_num = &cb_data->decoder_states[header.client_id].seq_number;
+
+  if (*current_seq_num >= 0 && *current_seq_num < data_header.seq_number) {
+    spdlog::trace("Current at seq no.{}, incoming at seq no.{}",
+                  *current_seq_num, data_header.seq_number);
+    void *write_ptr;
+    size_t target_bytes_to_write = (sizeof(short) + ENCODED_SIZE) *
+                                   (data_header.seq_number - *current_seq_num);
+    size_t bytes_to_write = target_bytes_to_write;
+    if (ma_rb_acquire_write(cb_data->ring_buffers[header.client_id],
+                            &bytes_to_write, &write_ptr) != MA_SUCCESS ||
+        bytes_to_write != target_bytes_to_write) {
+      spdlog::trace("Buffer full: Seq no. too large");
+      return true;
+    }
+    memset(write_ptr, 0, bytes_to_write);
+    ma_rb_commit_write(cb_data->ring_buffers[header.client_id], bytes_to_write);
+  }
 
   void *write_ptr;
   size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
@@ -358,6 +379,9 @@ bool Client::process_audio_packet() {
   memcpy(write_buffer_ptr, data.data(), data_header.data_length);
   ma_rb_commit_write(cb_data->ring_buffers[header.client_id], bytes_to_write);
 
+  cb_data->decoder_states[header.client_id].seq_number =
+      data_header.seq_number + 1;
+
   spdlog::trace("write {} bytes of audio data in ring buffer for client {}",
                 *data_length, header.client_id);
 
@@ -368,7 +392,8 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
   // spdlog::trace("captured audio data of {} bytes", data.size());
   AudioPacketHeader header{.type = AudioPacketHeader::Type::Data,
                            .client_id = client_id};
-  AudioDataPacketHeader data_header{.data_length = data.size()};
+  AudioDataPacketHeader data_header{.seq_number = seq_number++,
+                                    .data_length = data.size()};
   int packet_size = sizeof(header) + sizeof(data_header) + data.size();
   unsigned char *packet = new unsigned char[packet_size];
   memcpy(packet, &header, sizeof(header));
@@ -571,7 +596,7 @@ int main(int argc, char **argv) {
   }
   opus_encoder_destroy(client.cb_data->encoder_state);
   for (auto entry : client.cb_data->decoder_states) {
-    opus_decoder_destroy(entry.second);
+    opus_decoder_destroy(entry.second.decoder_state);
   }
   delete client.cb_data;
 

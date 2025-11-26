@@ -40,6 +40,7 @@ struct Client {
   AudioInput *input;
   AudioOutput *output;
   CallbackData *cb_data;
+  int seq_number = 0;
 
   void print_interaction_menu();
 
