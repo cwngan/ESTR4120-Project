@@ -18,8 +18,10 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
     auto id = entry.first;
     auto ring_buffer = entry.second;
     ma_uint32 available_read = ma_rb_available_read(ring_buffer);
-    if (available_read < JITTER_DELAY * (ENCODED_SIZE + sizeof(short)))
+    if (available_read < JITTER_DELAY * (ENCODED_SIZE + sizeof(short))) {
+      spdlog::error("not enough data to read from buffer with jitter");
       continue;
+    }
 
     if (available_read > MAX_DELAY * (ENCODED_SIZE + sizeof(short))) {
       ma_uint32 skip = available_read - (MAX_DELAY - JITTER_DELAY) *
@@ -33,8 +35,12 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
     size_t bytes_to_read = target_bytes_to_read;
     if (ma_rb_acquire_read(ring_buffer, &bytes_to_read, &read_ptr) !=
             MA_SUCCESS ||
-        bytes_to_read != target_bytes_to_read)
+        bytes_to_read != target_bytes_to_read) {
+
+      spdlog::error(
+          "fail to acquire enough ptr to read enough data from buffer");
       continue;
+    }
 
     unsigned short *size = static_cast<unsigned short *>(read_ptr);
     unsigned char *buffer;

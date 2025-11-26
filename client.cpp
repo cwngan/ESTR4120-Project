@@ -8,6 +8,7 @@
 #include "utils.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <netdb.h>
@@ -254,6 +255,9 @@ bool Client::process_main_packet() {
         cb_data->ring_buffers[res.id] = create_ring_buffer(
             (ENCODED_SIZE + sizeof(short)) * (SAMPLE_RATE / FRAME_COUNT));
         cb_data->ring_buffer_count++;
+        spdlog::debug("Created ring buffer with size {}",
+                      (ENCODED_SIZE + sizeof(short)) *
+                          (SAMPLE_RATE / FRAME_COUNT));
         int error;
         OpusDecoder *decoder_state =
             opus_decoder_create(SAMPLE_RATE, CHANNELS, &error);
@@ -346,24 +350,35 @@ bool Client::process_audio_packet() {
   int *current_seq_num = &cb_data->decoder_states[header.client_id].seq_number;
   // ignore old packet
   if (data_header.seq_number < *current_seq_num ||
-      data_header.seq_number - *current_seq_num > (1 << 30))
+      data_header.seq_number - *current_seq_num > (1 << 30)) {
+
+    spdlog::debug("received old packet seq no. {}, current at {}",
+                  data_header.seq_number, *current_seq_num);
     return true;
+  }
 
   if (*current_seq_num >= 0 && *current_seq_num < data_header.seq_number) {
-    spdlog::trace("Current at seq no.{}, incoming at seq no.{}",
-                  *current_seq_num, data_header.seq_number);
+    spdlog::debug("skipping seq no. to {}, current at {}",
+                  data_header.seq_number, *current_seq_num);
     void *write_ptr;
     size_t target_bytes_to_write = (sizeof(short) + ENCODED_SIZE) *
                                    (data_header.seq_number - *current_seq_num);
-    size_t bytes_to_write = target_bytes_to_write;
-    if (ma_rb_acquire_write(cb_data->ring_buffers[header.client_id],
-                            &bytes_to_write, &write_ptr) != MA_SUCCESS ||
-        bytes_to_write != target_bytes_to_write) {
-      spdlog::trace("Buffer full: Seq no. too large");
-      return true;
+    size_t bytes_written = 0;
+    while (bytes_written < target_bytes_to_write) {
+      size_t bytes_to_write = target_bytes_to_write - bytes_written;
+      if (ma_rb_acquire_write(cb_data->ring_buffers[header.client_id],
+                              &bytes_to_write, &write_ptr) != MA_SUCCESS) {
+
+        spdlog::debug("Failed to acquire write pointer");
+        return true;
+      }
+      memset(write_ptr, 0, bytes_to_write);
+      ma_rb_commit_write(cb_data->ring_buffers[header.client_id],
+                         bytes_to_write);
+      bytes_written += bytes_to_write;
+      spdlog::debug("commited writing {}/{} bytes of empty data", bytes_written,
+                    target_bytes_to_write);
     }
-    memset(write_ptr, 0, bytes_to_write);
-    ma_rb_commit_write(cb_data->ring_buffers[header.client_id], bytes_to_write);
   }
 
   void *write_ptr;
@@ -372,7 +387,7 @@ bool Client::process_audio_packet() {
   if (ma_rb_acquire_write(cb_data->ring_buffers[header.client_id],
                           &bytes_to_write, &write_ptr) != MA_SUCCESS ||
       bytes_to_write != target_bytes_to_write) {
-    spdlog::trace("Buffer full");
+    spdlog::debug("Buffer full");
     return true;
   }
 
@@ -384,7 +399,7 @@ bool Client::process_audio_packet() {
   ma_rb_commit_write(cb_data->ring_buffers[header.client_id], bytes_to_write);
 
   cb_data->decoder_states[header.client_id].seq_number =
-      data_header.seq_number + 1;
+      data_header.seq_number == INT32_MAX ? 0 : data_header.seq_number + 1;
 
   spdlog::trace("write {} bytes of audio data in ring buffer for client {}",
                 *data_length, header.client_id);
