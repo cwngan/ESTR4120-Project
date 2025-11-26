@@ -344,6 +344,10 @@ bool Client::process_audio_packet() {
          data.size());
 
   int *current_seq_num = &cb_data->decoder_states[header.client_id].seq_number;
+  // ignore old packet
+  if (data_header.seq_number < *current_seq_num ||
+      data_header.seq_number - *current_seq_num > (1 << 30))
+    return true;
 
   if (*current_seq_num >= 0 && *current_seq_num < data_header.seq_number) {
     spdlog::trace("Current at seq no.{}, incoming at seq no.{}",
