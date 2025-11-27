@@ -252,12 +252,9 @@ bool Client::process_main_packet() {
     if (res.id >= 0) {
       spdlog::debug("Received connection packet, id: {}", res.id);
       if (cb_data->ring_buffers.find(res.id) == cb_data->ring_buffers.end()) {
-        cb_data->ring_buffers[res.id] = create_ring_buffer(
-            (ENCODED_SIZE + sizeof(short)) * (SAMPLE_RATE / FRAME_COUNT));
-        cb_data->ring_buffer_count++;
-        spdlog::debug("Created ring buffer with size {}",
-                      (ENCODED_SIZE + sizeof(short)) *
-                          (SAMPLE_RATE / FRAME_COUNT));
+        cb_data->ring_buffers[res.id] = create_ring_buffer(SAMPLE_RATE);
+        cb_data->connected_clients++;
+        spdlog::debug("Created ring buffer with size {}", SAMPLE_RATE);
         int error;
         OpusDecoder *decoder_state =
             opus_decoder_create(SAMPLE_RATE, CHANNELS, &error);
@@ -265,6 +262,10 @@ bool Client::process_main_packet() {
         cb_data->decoder_states[res.id] = {.seq_number = -1,
                                            .decoder_state = decoder_state};
       }
+      if (!muted)
+        input->start();
+      if (!deafened)
+        output->start();
       std::cout << "\nSuccessfully connected to client " << res.id << std::endl;
     } else {
       std::cout << "\nFailed to connect to client\n";
@@ -277,11 +278,15 @@ bool Client::process_main_packet() {
     if (res.id >= 0) {
       spdlog::debug("Received disconnection packet, id: {}", res.id);
       if (cb_data->ring_buffers.find(res.id) != cb_data->ring_buffers.end()) {
-        ma_rb_uninit(cb_data->ring_buffers[res.id]);
+        ma_pcm_rb_uninit(cb_data->ring_buffers[res.id]);
         cb_data->ring_buffers.erase(res.id);
-        cb_data->ring_buffer_count--;
+        cb_data->connected_clients--;
         opus_decoder_destroy(cb_data->decoder_states[res.id].decoder_state);
         cb_data->decoder_states.erase(res.id);
+      }
+      if (cb_data->connected_clients == 0) {
+        input->pause();
+        output->pause();
       }
       std::cout << "\nSuccessfully disconnected from client " << res.id
                 << std::endl;
@@ -361,48 +366,53 @@ bool Client::process_audio_packet() {
     spdlog::debug("skipping seq no. to {}, current at {}",
                   data_header.seq_number, *current_seq_num);
     void *write_ptr;
-    size_t target_bytes_to_write = (sizeof(short) + ENCODED_SIZE) *
-                                   (data_header.seq_number - *current_seq_num);
-    size_t bytes_written = 0;
-    while (bytes_written < target_bytes_to_write) {
-      size_t bytes_to_write = target_bytes_to_write - bytes_written;
-      if (ma_rb_acquire_write(cb_data->ring_buffers[header.client_id],
-                              &bytes_to_write, &write_ptr) != MA_SUCCESS) {
+    ma_uint32 target_frames_to_write =
+        FRAME_COUNT * (data_header.seq_number - *current_seq_num);
+    ma_uint32 frames_written = 0;
+    while (frames_written < target_frames_to_write) {
+      ma_uint32 frames_to_write = target_frames_to_write - frames_written;
+      if (ma_pcm_rb_acquire_write(cb_data->ring_buffers[header.client_id],
+                                  &frames_to_write, &write_ptr) != MA_SUCCESS) {
 
         spdlog::debug("Failed to acquire write pointer");
         return true;
       }
-      memset(write_ptr, 0, bytes_to_write);
-      ma_rb_commit_write(cb_data->ring_buffers[header.client_id],
-                         bytes_to_write);
-      bytes_written += bytes_to_write;
-      spdlog::debug("commited writing {}/{} bytes of empty data", bytes_written,
-                    target_bytes_to_write);
+      auto decoded_bytes = opus_decode_float(
+          cb_data->decoder_states[header.client_id].decoder_state, NULL, 0,
+          static_cast<float *>(write_ptr), FRAME_COUNT, 0);
+      ma_pcm_rb_commit_write(cb_data->ring_buffers[header.client_id],
+                             frames_to_write);
+      frames_written += frames_to_write;
+      spdlog::debug("commited writing {} ({} bytes)/{} frames of empty data",
+                    frames_written, decoded_bytes, target_frames_to_write);
     }
   }
 
   void *write_ptr;
-  size_t target_bytes_to_write = sizeof(short) + ENCODED_SIZE;
-  size_t bytes_to_write = target_bytes_to_write;
-  if (ma_rb_acquire_write(cb_data->ring_buffers[header.client_id],
-                          &bytes_to_write, &write_ptr) != MA_SUCCESS ||
-      bytes_to_write != target_bytes_to_write) {
+  ma_uint32 frames_to_write = FRAME_COUNT;
+  if (ma_pcm_rb_acquire_write(cb_data->ring_buffers[header.client_id],
+                              &frames_to_write, &write_ptr) != MA_SUCCESS ||
+      frames_to_write != FRAME_COUNT) {
     spdlog::debug("Buffer full");
     return true;
   }
 
-  unsigned short *data_length = static_cast<unsigned short *>(write_ptr);
-  unsigned char *write_buffer_ptr =
-      static_cast<unsigned char *>(write_ptr) + sizeof(*data_length);
-  *data_length = data_header.data_length;
-  memcpy(write_buffer_ptr, data.data(), data_header.data_length);
-  ma_rb_commit_write(cb_data->ring_buffers[header.client_id], bytes_to_write);
+  auto decoded_bytes = opus_decode_float(
+      cb_data->decoder_states[header.client_id].decoder_state,
+      buffer.data() + sizeof(header) + sizeof(data_header),
+      data_header.data_length, static_cast<float *>(write_ptr), FRAME_COUNT, 0);
+
+  spdlog::trace("decoding with parameters: frameCount={}, size={}", FRAME_COUNT,
+                data_header.data_length);
+  ma_pcm_rb_commit_write(cb_data->ring_buffers[header.client_id],
+                         frames_to_write);
 
   cb_data->decoder_states[header.client_id].seq_number =
       data_header.seq_number == INT32_MAX ? 0 : data_header.seq_number + 1;
 
-  spdlog::trace("write {} bytes of audio data in ring buffer for client {}",
-                *data_length, header.client_id);
+  spdlog::trace(
+      "write {} bytes, {} frames of audio data in ring buffer for client {}",
+      decoded_bytes, frames_to_write, header.client_id);
 
   return true;
 }
@@ -593,7 +603,6 @@ int main(int argc, char **argv) {
       [&client](std::vector<unsigned char> &data) {
         client.capture_data_handler(data);
       };
-  client.cb_data->decoded_data = std::vector<float>(FRAME_COUNT * CHANNELS);
 
   AudioInput *input = new AudioInput(encoder_state, client.cb_data,
                                      pCaptureInfos[capture_device].id);
@@ -602,9 +611,6 @@ int main(int argc, char **argv) {
 
   client.input = input;
   client.output = output;
-
-  client.input->start();
-  client.output->start();
 
   client.print_interaction_menu();
 
@@ -616,7 +622,7 @@ int main(int argc, char **argv) {
   client.input->stop();
   client.output->stop();
   for (auto &entry : client.cb_data->ring_buffers) {
-    ma_rb_uninit(entry.second);
+    ma_pcm_rb_uninit(entry.second);
   }
   opus_encoder_destroy(client.cb_data->encoder_state);
   for (auto entry : client.cb_data->decoder_states) {

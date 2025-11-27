@@ -9,60 +9,46 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
                                        const void *pInput,
                                        ma_uint32 frameCount) {
   CallbackData *cb_data = static_cast<CallbackData *>(pDevice->pUserData);
-  if (cb_data->ring_buffer_count == 0)
+  if (cb_data->connected_clients == 0)
     return;
 
-  int ring_buffer_count = cb_data->ring_buffer_count;
+  int ring_buffer_count = cb_data->connected_clients;
   spdlog::trace("{} ring buffer to read from", ring_buffer_count);
   for (auto entry : cb_data->ring_buffers) {
     auto id = entry.first;
     auto ring_buffer = entry.second;
-    ma_uint32 available_read = ma_rb_available_read(ring_buffer);
-    if (available_read < JITTER_DELAY * (ENCODED_SIZE + sizeof(short))) {
-      spdlog::error("not enough data to read from buffer with jitter");
+    ma_uint32 available_read = ma_pcm_rb_available_read(ring_buffer);
+    if (available_read < JITTER_DELAY) {
+      spdlog::error("not enough data to read from buffer with jitter: need {} "
+                    "frames, available {} frames",
+                    JITTER_DELAY, available_read);
       continue;
     }
 
-    if (available_read > MAX_DELAY * (ENCODED_SIZE + sizeof(short))) {
-      ma_uint32 skip = available_read - (MAX_DELAY - JITTER_DELAY) *
-                                            (ENCODED_SIZE + sizeof(short));
-      spdlog::warn("{} bytes behind, skipping {} bytes", available_read, skip);
-      ma_rb_seek_read(ring_buffer, skip);
+    if (available_read > MAX_DELAY) {
+      ma_uint32 skip = available_read - (MAX_DELAY + JITTER_DELAY) / 2;
+      spdlog::warn("{} frames behind, skipping {} frames", available_read,
+                   skip);
+      ma_pcm_rb_seek_read(ring_buffer, skip);
     }
 
     void *read_ptr;
-    size_t target_bytes_to_read = sizeof(short) + ENCODED_SIZE;
-    size_t bytes_to_read = target_bytes_to_read;
-    if (ma_rb_acquire_read(ring_buffer, &bytes_to_read, &read_ptr) !=
+    ma_uint32 frames_to_read = FRAME_COUNT;
+    if (ma_pcm_rb_acquire_read(ring_buffer, &frames_to_read, &read_ptr) !=
             MA_SUCCESS ||
-        bytes_to_read != target_bytes_to_read) {
+        frames_to_read != FRAME_COUNT) {
 
       spdlog::error(
           "fail to acquire enough ptr to read enough data from buffer");
       continue;
     }
 
-    unsigned short *size = static_cast<unsigned short *>(read_ptr);
-    unsigned char *buffer;
+    float *pcm = static_cast<float *>(read_ptr);
+    for (int i = 0; i < frames_to_read * pDevice->playback.channels; i++)
+      static_cast<float *>(pOutput)[i] += pcm[i];
 
-    if (*size == 0) {
-      // frame lost or skipped
-      buffer = NULL;
-    } else {
-      buffer = static_cast<unsigned char *>(read_ptr) + sizeof(*size);
-    }
-    auto decoded_bytes =
-        opus_decode_float(cb_data->decoder_states[id].decoder_state, buffer,
-                          *size, cb_data->decoded_data.data(), frameCount, 0);
-    spdlog::trace("decoding with parameters: frameCount={}, size={}",
-                  frameCount, *size);
-
-    for (int i = 0; i < frameCount * pDevice->playback.channels; i++)
-      static_cast<float *>(pOutput)[i] += cb_data->decoded_data[i];
-
-    ma_rb_commit_read(ring_buffer, bytes_to_read);
-    spdlog::trace("read {} bytes at {}, decoded to {} bytes", *size, read_ptr,
-                  decoded_bytes);
+    ma_pcm_rb_commit_read(ring_buffer, frames_to_read);
+    spdlog::trace("read {} frames at {}", frames_to_read, read_ptr);
   }
 
   (void)pInput;
