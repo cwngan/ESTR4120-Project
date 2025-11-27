@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.18.0)
 
 project(VoiceChat)
 
+set(CMAKE_EXPORT_COMPILE_COMMAND ON)
 set(EXECUTABLE_OUTPUT_PATH bin/)
 
 include(FetchContent)
@@ -30,6 +31,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
 
 find_package(Threads REQUIRED)
+
+add_compile_options(-O3)
 
 if (OPUS_FOUND)
   add_executable(client client.cpp audio_input.cpp audio_output.cpp audio_common.cpp common.cpp utils.cpp)
