@@ -1,6 +1,6 @@
 #include "client.h"
 #include "audio_common.h"
-#include "common.h"
+#include "common.hpp"
 #include "cxxopts.hpp"
 #include "spdlog/common.h"
 #include "spdlog/sinks/daily_file_sink.h"

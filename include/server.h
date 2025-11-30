@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.h"
+#include "common.hpp"
 #include "cxxopts.hpp"
 #include <cstddef>
 #include <netdb.h>

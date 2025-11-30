@@ -3,7 +3,7 @@
 #define EPOLL_MAX_EVENTS 1
 
 struct RequestPacketHeader {
-  enum Type {
+  enum Type : short {
     Connect,
     GetConnections,
     ConnectClient,
@@ -15,7 +15,7 @@ struct RequestPacketHeader {
 };
 
 struct ResponsePacketHeader {
-  enum Type {
+  enum Type : short {
     Connect,
     GetConnections,
     ConnectClient,
@@ -74,7 +74,7 @@ struct DeafenResponsePacket {
 };
 
 struct AudioPacketHeader {
-  enum Type { Connect, Data };
+  enum Type : short { Connect, Data };
   Type type;
   int client_id;
 };
@@ -87,5 +87,3 @@ struct AudioDataPacketHeader {
   int seq_number;
   unsigned long data_length;
 };
-
-void set_nonblocking(int sock_fd);

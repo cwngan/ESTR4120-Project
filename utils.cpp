@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "spdlog/spdlog.h"
+#include <fcntl.h>
 #include <netdb.h>
 
 int create_server_socket(std::string port, int sock_type, int backlog) {
@@ -53,4 +54,16 @@ int create_client_socket(std::string hostname, std::string port, int socktype) {
     throw std::runtime_error("Error connecting to server");
 
   return sock_fd;
+}
+
+void set_nonblocking(int sock_fd) {
+  int flags = fcntl(sock_fd, F_GETFL, 0);
+  if (flags == -1) {
+    throw std::runtime_error("Error getting socket flags: " +
+                             std::string(strerror(errno)));
+  }
+  if (fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+    throw std::runtime_error("Error setting socket to non-blocking: " +
+                             std::string(strerror(errno)));
+  }
 }
