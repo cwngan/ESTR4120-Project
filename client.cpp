@@ -14,6 +14,7 @@
 #include <netdb.h>
 #include <opus.h>
 #include <opus_defines.h>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -354,8 +355,9 @@ bool Client::process_audio_packet() {
 
   int *current_seq_num = &cb_data->decoder_states[header.client_id].seq_number;
   // ignore old packet
-  if (data_header.seq_number < *current_seq_num ||
-      data_header.seq_number - *current_seq_num > (1 << 30)) {
+  if (*current_seq_num != -1 &&
+      (data_header.seq_number < *current_seq_num ||
+       data_header.seq_number - *current_seq_num > (1 << 30))) {
 
     spdlog::debug("received old packet seq no. {}, current at {}",
                   data_header.seq_number, *current_seq_num);
@@ -541,8 +543,13 @@ int main(int argc, char **argv) {
   else if (options.debug)
     spdlog::set_level(spdlog::level::debug);
 
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_real_distribution<> distrib(0, INT_MAX);
+
   Client client;
   client.options = options;
+  client.seq_number = distrib(gen);
 
   ma_context context;
   if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
