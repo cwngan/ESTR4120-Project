@@ -19,9 +19,9 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
     auto ring_buffer = entry.second;
     ma_uint32 available_read = ma_pcm_rb_available_read(ring_buffer);
     if (available_read < JITTER_DELAY) {
-      spdlog::error("not enough data to read from buffer with jitter: need {} "
-                    "frames, available {} frames",
-                    JITTER_DELAY, available_read);
+      spdlog::warn("not enough data to read from buffer with jitter: need {} "
+                   "frames, available {} frames",
+                   JITTER_DELAY, available_read);
       continue;
     }
 
