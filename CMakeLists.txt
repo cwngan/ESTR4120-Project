@@ -1,8 +1,9 @@
-cmake_minimum_required(VERSION 3.18.0)
+cmake_minimum_required(VERSION 4.2.0)
 
 project(VoiceChat)
 
 set(CMAKE_EXPORT_COMPILE_COMMAND ON)
+Set(FETCHCONTENT_QUIET FALSE)
 set(EXECUTABLE_OUTPUT_PATH bin/)
 
 include(FetchContent)
