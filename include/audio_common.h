@@ -23,9 +23,9 @@ struct ClientStreamDecoder {
 
 struct CallbackData {
   OpusEncoder *encoder_state;
-  std::unordered_map<unsigned int, ClientStreamDecoder> decoder_states;
+  std::unordered_map<int, ClientStreamDecoder> decoder_states;
   int connected_clients = 0;
-  std::unordered_map<unsigned int, ma_pcm_rb *> ring_buffers;
+  std::unordered_map<int, ma_pcm_rb *> ring_buffers;
 
   std::function<void(std::vector<unsigned char> &data)> capture_data_handler;
 };
