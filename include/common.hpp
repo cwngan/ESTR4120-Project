@@ -86,4 +86,5 @@ struct AudioConnectResponsePacket {
 struct AudioDataPacketHeader {
   int seq_number;
   unsigned long data_length;
+  bool ping = false;
 };

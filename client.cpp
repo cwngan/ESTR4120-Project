@@ -350,6 +350,11 @@ bool Client::process_audio_packet() {
 
   AudioDataPacketHeader data_header;
   memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
+  if (data_header.ping) {
+    spdlog::info("Received ping for packet {} at {}", seq_number,
+                 std::chrono::system_clock::now().time_since_epoch().count());
+    cb_data->pings.insert(data_header.seq_number);
+  }
   std::vector<unsigned char> data(data_header.data_length);
   memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
          data.size());
@@ -367,8 +372,13 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
   // spdlog::trace("captured audio data of {} bytes", data.size());
   AudioPacketHeader header{.type = AudioPacketHeader::Type::Data,
                            .client_id = client_id};
-  AudioDataPacketHeader data_header{.seq_number = seq_number,
-                                    .data_length = data.size()};
+  AudioDataPacketHeader data_header{
+      .seq_number = seq_number,
+      .data_length = data.size(),
+      .ping = seq_number % (SAMPLE_RATE / FRAME_COUNT) == 0};
+  if (data_header.ping)
+    spdlog::info("Sent ping for packet {} at {}", seq_number,
+                 std::chrono::system_clock::now().time_since_epoch().count());
   int packet_size = sizeof(header) + sizeof(data_header) + data.size();
   unsigned char *packet = new unsigned char[packet_size];
   memcpy(packet, &header, sizeof(header));

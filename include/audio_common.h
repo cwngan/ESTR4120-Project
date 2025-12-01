@@ -6,10 +6,11 @@
 #include <functional>
 #include <opus.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #define SAMPLE_RATE 48000
-#define BITRATE 128000
+#define BITRATE 64000
 #define FRAME_COUNT 960
 #define JITTER_DELAY 960
 #define MAX_DELAY 4800
@@ -26,6 +27,7 @@ struct CallbackData {
   std::unordered_map<int, ClientStreamDecoder> decoder_states;
   int connected_clients = 0;
   std::unordered_map<int, ma_pcm_rb *> ring_buffers;
+  std::unordered_set<int> pings;
 
   std::function<void(std::vector<unsigned char> &data)> capture_data_handler;
 };
