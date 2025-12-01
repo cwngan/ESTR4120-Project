@@ -2,6 +2,7 @@
 #include "audio_input.h"
 #include "audio_output.h"
 #include "cxxopts.hpp"
+#include <mutex>
 
 struct ClientOptions {
   // Hostname of the server
@@ -26,6 +27,8 @@ struct ClientOptions {
   void parse_options(int argc, char *argv[]);
 };
 
+struct JitterBuffer;
+
 struct Client {
   ClientOptions options;
   int main_fd;
@@ -40,6 +43,8 @@ struct Client {
   AudioInput *input;
   AudioOutput *output;
   CallbackData *cb_data;
+  std::vector<float> decoded_data;
+  JitterBuffer *jitter_buffer;
   int seq_number;
 
   void print_interaction_menu();
@@ -62,4 +67,24 @@ struct Client {
   void mute();
   void undeafen();
   void deafen();
+};
+
+struct JitterBuffer {
+private:
+  std::unordered_map<int, std::vector<unsigned char>> buffers;
+  std::unordered_map<int, std::vector<size_t>> data_lengths;
+  int size;
+  std::unordered_map<int, int> read_heads;
+  std::unordered_map<int, int> write_heads;
+  int initial_seq = -1;
+  std::mutex mutex;
+  Client *client;
+
+public:
+  JitterBuffer(Client *client, size_t size);
+  bool shutting_down = false;
+  void write_frame(unsigned char *src, int data_length, int seq_number,
+                   int client_id);
+  bool read_frame(float *dest, int client_id);
+  void push_to_rb();
 };

@@ -7,6 +7,7 @@
 #include "spdlog/spdlog.h"
 #include "utils.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -353,68 +354,11 @@ bool Client::process_audio_packet() {
   memcpy(data.data(), buffer.data() + sizeof(header) + sizeof(data_header),
          data.size());
 
-  int *current_seq_num = &cb_data->decoder_states[header.client_id].seq_number;
-  // ignore old packet
-  if (*current_seq_num != -1 &&
-      (data_header.seq_number < *current_seq_num ||
-       data_header.seq_number - *current_seq_num > (1 << 30))) {
+  jitter_buffer->write_frame(data.data(), static_cast<int>(data.size()),
+                             data_header.seq_number, header.client_id);
 
-    spdlog::debug("received old packet seq no. {}, current at {}",
-                  data_header.seq_number, *current_seq_num);
-    return true;
-  }
-
-  if (*current_seq_num >= 0 && *current_seq_num < data_header.seq_number) {
-    spdlog::debug("skipping seq no. to {}, current at {}",
-                  data_header.seq_number, *current_seq_num);
-    void *write_ptr;
-    ma_uint32 target_frames_to_write =
-        FRAME_COUNT * (data_header.seq_number - *current_seq_num);
-    ma_uint32 frames_written = 0;
-    while (frames_written < target_frames_to_write) {
-      ma_uint32 frames_to_write = target_frames_to_write - frames_written;
-      if (ma_pcm_rb_acquire_write(cb_data->ring_buffers[header.client_id],
-                                  &frames_to_write, &write_ptr) != MA_SUCCESS) {
-
-        spdlog::debug("Failed to acquire write pointer");
-        return true;
-      }
-      auto decoded_bytes = opus_decode_float(
-          cb_data->decoder_states[header.client_id].decoder_state, NULL, 0,
-          static_cast<float *>(write_ptr), FRAME_COUNT, 0);
-      ma_pcm_rb_commit_write(cb_data->ring_buffers[header.client_id],
-                             frames_to_write);
-      frames_written += frames_to_write;
-      spdlog::debug("commited writing {} ({} bytes)/{} frames of empty data",
-                    frames_written, decoded_bytes, target_frames_to_write);
-    }
-  }
-
-  void *write_ptr;
-  ma_uint32 frames_to_write = FRAME_COUNT;
-  if (ma_pcm_rb_acquire_write(cb_data->ring_buffers[header.client_id],
-                              &frames_to_write, &write_ptr) != MA_SUCCESS ||
-      frames_to_write != FRAME_COUNT) {
-    spdlog::debug("Buffer full");
-    return true;
-  }
-
-  auto decoded_bytes = opus_decode_float(
-      cb_data->decoder_states[header.client_id].decoder_state,
-      buffer.data() + sizeof(header) + sizeof(data_header),
-      data_header.data_length, static_cast<float *>(write_ptr), FRAME_COUNT, 0);
-
-  spdlog::trace("decoding with parameters: frameCount={}, size={}", FRAME_COUNT,
-                data_header.data_length);
-  ma_pcm_rb_commit_write(cb_data->ring_buffers[header.client_id],
-                         frames_to_write);
-
-  cb_data->decoder_states[header.client_id].seq_number =
-      data_header.seq_number == INT32_MAX ? 0 : data_header.seq_number + 1;
-
-  spdlog::trace(
-      "write {} bytes, {} frames of audio data in ring buffer for client {}",
-      decoded_bytes, frames_to_write, header.client_id);
+  spdlog::trace("wrote {} frames of audio data in jitter buffer for client {}",
+                FRAME_COUNT, header.client_id);
 
   return true;
 }
@@ -529,6 +473,119 @@ void Client::undeafen() {
   send(main_fd, buf, sizeof(buf), 0);
 }
 
+JitterBuffer::JitterBuffer(Client *client, size_t size)
+    : client(client), size(size) {}
+
+void JitterBuffer::write_frame(unsigned char *src, int data_length,
+                               int seq_number, int client_id) {
+  mutex.lock();
+
+  int bytes_per_encoded_data = BITRATE * FRAME_COUNT / SAMPLE_RATE / 8;
+  if (initial_seq == -1)
+    initial_seq = seq_number;
+  if (buffers.find(client_id) == buffers.end()) {
+    buffers[client_id].assign(size * bytes_per_encoded_data, 0);
+    data_lengths[client_id].assign(size, 0);
+    read_heads[client_id] = 0;
+    write_heads[client_id] = 0;
+  }
+
+  int encoded_size = BITRATE * FRAME_COUNT / SAMPLE_RATE / 8;
+  int buffer_index = ((seq_number - initial_seq) % size + size) % size;
+  memcpy(buffers[client_id].data() + buffer_index * bytes_per_encoded_data, src,
+         data_length);
+  data_lengths[client_id][buffer_index] = data_length;
+  write_heads[client_id] = (buffer_index > write_heads[client_id] ||
+                            write_heads[client_id] - buffer_index > size / 2)
+                               ? buffer_index
+                               : read_heads[client_id];
+  mutex.unlock();
+}
+
+bool JitterBuffer::read_frame(float *dest, int client_id) {
+  mutex.lock();
+  spdlog::trace("write head: {}, read_head: {}", write_heads[client_id],
+                read_heads[client_id]);
+  if (buffers.find(client_id) == buffers.end() ||
+      (write_heads[client_id] >= read_heads[client_id] &&
+       write_heads[client_id] - read_heads[client_id] <
+           JITTER_DELAY / FRAME_COUNT)) {
+    mutex.unlock();
+    return false;
+  }
+
+  if ((write_heads[client_id] < read_heads[client_id]
+           ? write_heads[client_id] + size
+           : write_heads[client_id]) -
+          read_heads[client_id] >
+      MAX_DELAY / FRAME_COUNT) {
+    read_heads[client_id] =
+        write_heads[client_id] - (MAX_DELAY - JITTER_DELAY) / FRAME_COUNT / 2;
+  }
+
+  int bytes_per_encoded_data = BITRATE * FRAME_COUNT / SAMPLE_RATE / 8;
+
+  size_t data_length = data_lengths[client_id][read_heads[client_id]];
+  unsigned char *decode_addr;
+  if (data_length == 0) {
+    decode_addr = NULL;
+  } else {
+    decode_addr = buffers[client_id].data() +
+                  read_heads[client_id] * bytes_per_encoded_data;
+  }
+
+  auto decoded_bytes = opus_decode_float(
+      client->cb_data->decoder_states[client_id].decoder_state, decode_addr,
+      data_lengths[client_id][read_heads[client_id]], dest, FRAME_COUNT, 0);
+  spdlog::trace("decoding with parameters: frameCount={}, size={}", FRAME_COUNT,
+                data_length);
+
+  // client->cb_data->decoder_states[client_id].seq_number =
+  //     data_header.seq_number == INT32_MAX ? 0 : data_header.seq_number + 1;
+  data_lengths[client_id][read_heads[client_id]] = 0;
+  read_heads[client_id]++;
+  read_heads[client_id] %= size;
+  mutex.unlock();
+
+  return true;
+}
+
+void JitterBuffer::push_to_rb() {
+  auto next_wake = std::chrono::steady_clock::now();
+  int frame_interval = 1000 / (SAMPLE_RATE / FRAME_COUNT);
+  while (!shutting_down) {
+    spdlog::trace("running thread at time {}",
+                  next_wake.time_since_epoch().count());
+    next_wake += std::chrono::milliseconds(frame_interval);
+
+    spdlog::trace("ring buffer count: {}",
+                  client->cb_data->ring_buffers.size());
+    for (auto entry : client->cb_data->ring_buffers) {
+      int id = entry.first;
+      auto rb = entry.second;
+      void *write_ptr;
+      ma_uint32 frames_to_write = FRAME_COUNT;
+
+      if (ma_pcm_rb_acquire_write(rb, &frames_to_write, &write_ptr) !=
+              MA_SUCCESS ||
+          frames_to_write != FRAME_COUNT) {
+        spdlog::debug("Buffer for client {} full", id);
+        continue;
+      }
+
+      if (!read_frame(static_cast<float *>(write_ptr), id)) {
+        continue;
+      }
+      ma_pcm_rb_commit_write(rb, frames_to_write);
+
+      spdlog::trace("write {} frames of audio data in ring buffer "
+                    "for client {}",
+                    frames_to_write, id);
+    }
+    std::this_thread::sleep_until(next_wake);
+  }
+}
+
 int main(int argc, char **argv) {
   auto daily_logger =
       spdlog::daily_logger_mt("daily_logger", "logs/client.log");
@@ -550,6 +607,8 @@ int main(int argc, char **argv) {
   Client client;
   client.options = options;
   client.seq_number = distrib(gen);
+  client.decoded_data = std::vector<float>(FRAME_COUNT);
+  client.jitter_buffer = new JitterBuffer(&client, SAMPLE_RATE / FRAME_COUNT);
 
   ma_context context;
   if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
@@ -619,12 +678,17 @@ int main(int argc, char **argv) {
   client.input = input;
   client.output = output;
 
+  std::thread push_thread([&client]() { client.jitter_buffer->push_to_rb(); });
+
   client.print_interaction_menu();
 
   while (client.process())
     continue;
 
   std::cout << "\nShutting down...\n";
+
+  client.jitter_buffer->shutting_down = true;
+  push_thread.join();
 
   client.input->stop();
   client.output->stop();

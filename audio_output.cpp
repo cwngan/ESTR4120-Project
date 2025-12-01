@@ -18,12 +18,6 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
     auto id = entry.first;
     auto ring_buffer = entry.second;
     ma_uint32 available_read = ma_pcm_rb_available_read(ring_buffer);
-    if (available_read < JITTER_DELAY) {
-      spdlog::warn("not enough data to read from buffer with jitter: need {} "
-                   "frames, available {} frames",
-                   JITTER_DELAY, available_read);
-      continue;
-    }
 
     if (available_read > MAX_DELAY) {
       ma_uint32 skip = available_read - (MAX_DELAY + JITTER_DELAY) / 2;
@@ -38,7 +32,7 @@ void AudioOutput::output_data_callback(ma_device *pDevice, void *pOutput,
             MA_SUCCESS ||
         frames_to_read != FRAME_COUNT) {
 
-      spdlog::error(
+      spdlog::trace(
           "fail to acquire enough ptr to read enough data from buffer");
       continue;
     }
