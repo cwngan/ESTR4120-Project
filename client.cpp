@@ -36,6 +36,12 @@ void Client::print_interaction_menu() {
   std::cout << "3 <id>\t - Disconnect from client" << std::endl;
   std::cout << "4\t - " << (muted ? "Unmute" : "Mute") << std::endl;
   std::cout << "5\t - " << (deafened ? "Undeafen" : "Deafen") << std::endl;
+  std::cout << "6 <num>\t - Set bitrate (current: "
+            << (bitrate == -1 ? "maximum"
+                              : std::to_string(bitrate / 1000) + "kbps")
+            << ")" << std::endl;
+  std::cout << "7 <num>\t - Set audio mode: 1 AUDIO, 2 VOIP, 3 LOWDELAY"
+            << std::endl;
   std::cout << "0\t - Quit" << std::endl;
   std::cout << "----------------------------\nEnter action: " << std::flush;
 }
@@ -174,6 +180,23 @@ bool Client::process_interaction() {
       undeafen();
     else
       deafen();
+  } else if (actions[0] == "6" && actions.size() >= 2) {
+    bitrate = std::stoi(actions[1]);
+    opus_encoder_ctl(cb_data->encoder_state, OPUS_SET_BITRATE(bitrate));
+    print_interaction_menu();
+  } else if (actions[0] == "7" && actions.size() >= 2) {
+    int mode = std::stoi(actions[1]);
+    if (mode == 1)
+      opus_encoder_ctl(cb_data->encoder_state,
+                       OPUS_SET_APPLICATION(OPUS_APPLICATION_AUDIO));
+    if (mode == 2)
+      opus_encoder_ctl(cb_data->encoder_state,
+                       OPUS_SET_APPLICATION(OPUS_APPLICATION_VOIP));
+    if (mode == 3)
+      opus_encoder_ctl(
+          cb_data->encoder_state,
+          OPUS_SET_APPLICATION(OPUS_APPLICATION_RESTRICTED_LOWDELAY));
+    print_interaction_menu();
   } else {
     std::cout << "Invalid action!\n";
     print_interaction_menu();
@@ -260,7 +283,7 @@ bool Client::process_main_packet() {
         int error;
         OpusDecoder *decoder_state =
             opus_decoder_create(SAMPLE_RATE, CHANNELS, &error);
-        opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(BITRATE));
+        opus_decoder_ctl(decoder_state, OPUS_SET_BITRATE(OPUS_BITRATE_MAX));
         cb_data->decoder_states[res.id] = {.seq_number = -1,
                                            .decoder_state = decoder_state};
       }
@@ -351,8 +374,8 @@ bool Client::process_audio_packet() {
   AudioDataPacketHeader data_header;
   memcpy(&data_header, buffer.data() + sizeof(header), sizeof(data_header));
   if (data_header.ping) {
-    spdlog::info("Received ping for packet {} at {}", seq_number,
-                 std::chrono::system_clock::now().time_since_epoch().count());
+    spdlog::debug("Received ping for packet {} at {}", data_header.seq_number,
+                  std::chrono::system_clock::now().time_since_epoch().count());
     cb_data->pings.insert(data_header.seq_number);
   }
   std::vector<unsigned char> data(data_header.data_length);
@@ -377,8 +400,8 @@ void Client::capture_data_handler(std::vector<unsigned char> &data) {
       .data_length = data.size(),
       .ping = seq_number % (SAMPLE_RATE / FRAME_COUNT) == 0};
   if (data_header.ping)
-    spdlog::info("Sent ping for packet {} at {}", seq_number,
-                 std::chrono::system_clock::now().time_since_epoch().count());
+    spdlog::debug("Sent ping for packet {} at {}", seq_number,
+                  std::chrono::system_clock::now().time_since_epoch().count());
   int packet_size = sizeof(header) + sizeof(data_header) + data.size();
   unsigned char *packet = new unsigned char[packet_size];
   memcpy(packet, &header, sizeof(header));
@@ -490,7 +513,7 @@ void JitterBuffer::write_frame(unsigned char *src, int data_length,
                                int seq_number, int client_id) {
   mutex.lock();
 
-  int bytes_per_encoded_data = BITRATE * FRAME_COUNT / SAMPLE_RATE / 8;
+  int bytes_per_encoded_data = MAX_AUDIO_DATA_SIZE;
   if (initial_seq == -1)
     initial_seq = seq_number;
   if (buffers.find(client_id) == buffers.end()) {
@@ -500,7 +523,7 @@ void JitterBuffer::write_frame(unsigned char *src, int data_length,
     write_heads[client_id] = 0;
   }
 
-  int encoded_size = BITRATE * FRAME_COUNT / SAMPLE_RATE / 8;
+  int encoded_size = MAX_AUDIO_DATA_SIZE;
   int buffer_index = ((seq_number - initial_seq) % size + size) % size;
   memcpy(buffers[client_id].data() + buffer_index * bytes_per_encoded_data, src,
          data_length);
@@ -533,7 +556,7 @@ bool JitterBuffer::read_frame(float *dest, int client_id) {
         write_heads[client_id] - (MAX_DELAY - JITTER_DELAY) / FRAME_COUNT / 2;
   }
 
-  int bytes_per_encoded_data = BITRATE * FRAME_COUNT / SAMPLE_RATE / 8;
+  int bytes_per_encoded_data = MAX_AUDIO_DATA_SIZE;
 
   size_t data_length = data_lengths[client_id][read_heads[client_id]];
   unsigned char *decode_addr;
@@ -669,7 +692,7 @@ int main(int argc, char **argv) {
   int error;
   OpusEncoder *encoder_state = opus_encoder_create(
       SAMPLE_RATE, CHANNELS, OPUS_APPLICATION_AUDIO, &error);
-  opus_encoder_ctl(encoder_state, OPUS_SET_BITRATE(BITRATE));
+  opus_encoder_ctl(encoder_state, OPUS_SET_BITRATE(OPUS_BITRATE_MAX));
 
   client.cb_data = new CallbackData;
   client.cb_data->encoder_state = encoder_state;

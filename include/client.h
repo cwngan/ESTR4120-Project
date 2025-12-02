@@ -47,6 +47,8 @@ struct Client {
   JitterBuffer *jitter_buffer;
   int seq_number;
 
+  int bitrate = OPUS_BITRATE_MAX;
+
   void print_interaction_menu();
 
   void setup_main_connection();

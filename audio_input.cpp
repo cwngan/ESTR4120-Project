@@ -11,10 +11,10 @@
 void AudioInput::input_data_callback(ma_device *pDevice, void *pOutput,
                                      const void *pInput, ma_uint32 frameCount) {
   CallbackData *cb_data = static_cast<CallbackData *>(pDevice->pUserData);
-  std::vector<unsigned char> buffer(ENCODED_SIZE);
+  std::vector<unsigned char> buffer(MAX_AUDIO_DATA_SIZE);
   auto encoded_bytes = opus_encode_float(
       cb_data->encoder_state, static_cast<const float *>(pInput), frameCount,
-      buffer.data(), ENCODED_SIZE);
+      buffer.data(), MAX_AUDIO_DATA_SIZE);
   if (encoded_bytes < 0) {
     printf("Error encoding audio\n");
     return;

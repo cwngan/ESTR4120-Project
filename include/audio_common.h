@@ -10,12 +10,11 @@
 #include <vector>
 
 #define SAMPLE_RATE 48000
-#define BITRATE 64000
+#define MAX_AUDIO_DATA_SIZE 1276
 #define FRAME_COUNT 960
 #define JITTER_DELAY 960
 #define MAX_DELAY 4800
 #define CHANNELS 2
-#define ENCODED_SIZE (BITRATE / 8 * FRAME_COUNT) / SAMPLE_RATE
 
 struct ClientStreamDecoder {
   int seq_number;
