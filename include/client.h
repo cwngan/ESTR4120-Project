@@ -85,6 +85,7 @@ private:
 public:
   JitterBuffer(Client *client, size_t size);
   bool shutting_down = false;
+  int skipped = 0;
   void write_frame(unsigned char *src, int data_length, int seq_number,
                    int client_id);
   bool read_frame(float *dest, int client_id);

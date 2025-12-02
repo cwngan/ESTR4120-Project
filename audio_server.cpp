@@ -117,12 +117,12 @@ void AudioServer::handle_data_packet(Client *client,
              sizeof(AudioDataPacketHeader),
          audio_header.data_length);
 
+  spdlog::trace("Received data packet from {}:{}", client->audio_hostname,
+                client->audio_service);
   for (int dst_id : main_server->connections[client->id]) {
     Client *dest_client = main_server->clients[dst_id];
     if (!dest_client)
       continue;
-    spdlog::trace("Received data packet from {}:{}", client->audio_hostname,
-                  client->audio_service);
     spdlog::trace("dest_client: {}, data_length: {}", dst_id,
                   audio_header.data_length);
     sendto(fd, raw_packet.data(), raw_packet.size(), 0,

@@ -42,6 +42,7 @@ void Client::print_interaction_menu() {
             << ")" << std::endl;
   std::cout << "7 <num>\t - Set audio mode: 1 AUDIO, 2 VOIP, 3 LOWDELAY"
             << std::endl;
+  std::cout << "8\t - Show number of skipped packets" << std::endl;
   std::cout << "0\t - Quit" << std::endl;
   std::cout << "----------------------------\nEnter action: " << std::flush;
 }
@@ -196,6 +197,10 @@ bool Client::process_interaction() {
       opus_encoder_ctl(
           cb_data->encoder_state,
           OPUS_SET_APPLICATION(OPUS_APPLICATION_RESTRICTED_LOWDELAY));
+    print_interaction_menu();
+  } else if (actions[0] == "8") {
+    std::cout << "Number of skipped packets: " << jitter_buffer->skipped
+              << std::endl;
     print_interaction_menu();
   } else {
     std::cout << "Invalid action!\n";
@@ -513,6 +518,8 @@ void JitterBuffer::write_frame(unsigned char *src, int data_length,
                                int seq_number, int client_id) {
   mutex.lock();
 
+  spdlog::trace("in write_frame, write head: {}, read_head: {}",
+                write_heads[client_id], read_heads[client_id]);
   int bytes_per_encoded_data = MAX_AUDIO_DATA_SIZE;
   if (initial_seq == -1)
     initial_seq = seq_number;
@@ -531,14 +538,14 @@ void JitterBuffer::write_frame(unsigned char *src, int data_length,
   write_heads[client_id] = (buffer_index > write_heads[client_id] ||
                             write_heads[client_id] - buffer_index > size / 2)
                                ? buffer_index
-                               : read_heads[client_id];
+                               : write_heads[client_id];
   mutex.unlock();
 }
 
 bool JitterBuffer::read_frame(float *dest, int client_id) {
   mutex.lock();
-  spdlog::trace("write head: {}, read_head: {}", write_heads[client_id],
-                read_heads[client_id]);
+  spdlog::trace("in read_frame, write head: {}, read_head: {}",
+                write_heads[client_id], read_heads[client_id]);
   if (buffers.find(client_id) == buffers.end() ||
       (write_heads[client_id] >= read_heads[client_id] &&
        write_heads[client_id] - read_heads[client_id] <
@@ -552,8 +559,10 @@ bool JitterBuffer::read_frame(float *dest, int client_id) {
            : write_heads[client_id]) -
           read_heads[client_id] >
       MAX_DELAY / FRAME_COUNT) {
+    int prev = read_heads[client_id];
     read_heads[client_id] =
         write_heads[client_id] - (MAX_DELAY - JITTER_DELAY) / FRAME_COUNT / 2;
+    // skipped += read_heads[client_id] - prev;
   }
 
   int bytes_per_encoded_data = MAX_AUDIO_DATA_SIZE;
@@ -562,6 +571,7 @@ bool JitterBuffer::read_frame(float *dest, int client_id) {
   unsigned char *decode_addr;
   if (data_length == 0) {
     decode_addr = NULL;
+    skipped++;
   } else {
     decode_addr = buffers[client_id].data() +
                   read_heads[client_id] * bytes_per_encoded_data;
