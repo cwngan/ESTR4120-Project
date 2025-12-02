@@ -36,6 +36,7 @@ struct Client {
 
   bool muted = false;
   bool deafened = false;
+  int skipped = 0;
 
   AudioInput *input;
   AudioOutput *output;

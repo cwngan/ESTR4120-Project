@@ -35,6 +35,7 @@ void Client::print_interaction_menu() {
   std::cout << "3 <id>\t - Disconnect from client" << std::endl;
   std::cout << "4\t - " << (muted ? "Unmute" : "Mute") << std::endl;
   std::cout << "5\t - " << (deafened ? "Undeafen" : "Deafen") << std::endl;
+  std::cout << "8\t - Show number of skipped packets" << std::endl;
   std::cout << "0\t - Quit" << std::endl;
   std::cout << "----------------------------\nEnter action: " << std::flush;
 }
@@ -173,6 +174,9 @@ bool Client::process_interaction() {
       undeafen();
     else
       deafen();
+  } else if (actions[0] == "8") {
+    std::cout << "Number of skipped packets: " << skipped << std::endl;
+    print_interaction_menu();
   } else {
     std::cout << "Invalid action!\n";
     print_interaction_menu();
@@ -367,6 +371,7 @@ bool Client::process_audio_packet() {
   if (*current_seq_num >= 0 && *current_seq_num < data_header.seq_number) {
     spdlog::debug("skipping seq no. to {}, current at {}",
                   data_header.seq_number, *current_seq_num);
+    skipped += data_header.seq_number - *current_seq_num;
     void *write_ptr;
     ma_uint32 target_frames_to_write =
         FRAME_COUNT * (data_header.seq_number - *current_seq_num);
